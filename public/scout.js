@@ -1,6 +1,7 @@
 const view = document.querySelector('#view');
 const notice = document.querySelector('#notice');
 const nav = document.querySelector('#nav');
+const manageLogin = document.querySelector('#manage-login');
 const logout = document.querySelector('#logout');
 const stat = { included: '正式证据库', pending: '待筛查', excluded: '已排除' };
 const levels = { record: '仅题录', abstract: '仅摘要', fulltext: '已核验正文' };
@@ -28,6 +29,7 @@ const jobs = { queued: '待处理', running: '处理中', done: '已完成', dea
 const topicStatuses = { candidate: 'Scout 候选', saved: '已收藏', archived: '已归档' };
 const zoteroStates = { queued: '已排队', synced: '条目及笔记已核对', item_saved: '条目已核对，暂无分析笔记', retry: '等待重试', failed: '写入失败' };
 let renderId = 0;
+let readWithoutLogin = false;
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -131,13 +133,14 @@ function disclosure(title, ...content) {
 
 function showLogin() {
   renderId++;
-  nav.hidden = logout.hidden = true;
+  nav.hidden = manageLogin.hidden = logout.hidden = true;
   view.setAttribute('aria-busy', 'false');
   view.replaceChildren(el('div', { class: 'panel login' },
-    el('h1', {}, '登录 Scout'),
+    el('h1', {}, readWithoutLogin ? 'Scout 管理登录' : '登录 Scout'),
     form(async data => { await api('login', { body: data }); await load(); },
       field('访问口令', 'password', { type: 'password', required: true, autocomplete: 'current-password', maxlength: 256 }),
-      el('div', { class: 'actions' }, button('登录', 'primary')))));
+      el('div', { class: 'actions' }, button('登录', 'primary'),
+        readWithoutLogin && link('返回研究总览', '/?view=overview', 'button')))));
 }
 
 function paperCard(item) {
@@ -232,7 +235,7 @@ async function overview() {
   ];
 }
 
-async function library(params) {
+async function library(params, canManage) {
   const args = Object.fromEntries([...params].filter(([key]) => ['q','tag','region','state','status','after'].includes(key)));
   const data = await api('library', { args });
   const counts = Object.fromEntries(data.counts.filter(row => row.status === 'included').map(row => [row.evidence_state, row.count]));
@@ -250,7 +253,7 @@ async function library(params) {
       .map(([label, count]) => el('div', { class: 'metric' }, el('strong', {}, count), el('span', {}, label)))),
     filters,
     data.rows.length ? list(...data.rows.map(paperCard)) : empty(
-      args.status === 'pending' ? '暂无待筛查的 DOI。' : '此筛选范围内暂无文献。可在任务与覆盖页检索 DOI 或启动回填。'),
+      args.status === 'pending' ? '暂无待筛查的 DOI。' : '此筛选范围内暂无文献。' + (canManage ? '可在任务与覆盖页检索 DOI 或启动回填。' : '')),
     data.next && link('下一页', urlOf({ ...args, after: data.next }), 'button')
   ].filter(Boolean);
 }
@@ -263,9 +266,9 @@ function evidence(row, includeDoi = false) {
       ' · ' + (row.origin === 'inferred' ? 'Scout 归纳' : '作者表述') + (row.reviewed ? ' · 人工已核验' : ' · 自动提取')], 'subtle'));
 }
 
-async function paperView(params) {
+async function paperView(params, canManage) {
   const paper = await api('paper', { args: { doi: params.get('doi') } });
-  const screen = disclosure('单篇筛查',
+  const screen = canManage && disclosure('单篇筛查',
     form(async data => {
       await api('screen', { body: { ...data, doi: paper.doi } }); errorMessage('筛查结果已保存'); await load({ keepNotice: true });
     }, select('审核结果', 'status', stat, paper.status),
@@ -273,7 +276,7 @@ async function paperView(params) {
     field('单篇类型依据', 'source', { type: 'url', required: true, value: paper.screening_url ?? paper.publisher_url }),
     area('审核说明', 'reason', paper.screening_reviewer ? paper.screening_reason : '', 2),
     el('div', { class: 'actions' }, button('保存筛查', 'primary'))));
-  const importDoc = !paper.document && paper.status !== 'excluded' && disclosure('导入已取得的正文文本',
+  const importDoc = canManage && !paper.document && paper.status !== 'excluded' && disclosure('导入已取得的正文文本',
     p('可从本地 PDF 提取文本并保留分页符，或用 # 标记章节标题。上传前核对 DOI 与来源。', 'subtle'),
     form(async (data, node) => {
       const file = node.querySelector('input[type=file]').files[0];
@@ -286,7 +289,7 @@ async function paperView(params) {
     field('选择本地文本文件', 'file', { type: 'file', accept: '.txt,text/plain' }),
     el('label', {}, '或粘贴正文文本', el('textarea', { name: 'text', rows: 5 })),
     el('div', { class: 'actions' }, button('导入正文', 'primary'))));
-  const review = paper.status !== 'excluded' && disclosure('补充人工核验证据',
+  const review = canManage && paper.status !== 'excluded' && disclosure('补充人工核验证据',
     form(async data => {
       await api('judgment', { body: { ...data, doi: paper.doi } }); errorMessage('证据已保存'); await load({ keepNotice: true });
     }, select('文章字段', 'field', fields, 'findings'),
@@ -298,8 +301,8 @@ async function paperView(params) {
     el('div', { class: 'actions' },
       link('下载 BibTeX', apiUrl('export', { doi: paper.doi, format: 'bib' }), 'button'),
       link('下载 RIS', apiUrl('export', { doi: paper.doi, format: 'ris' }), 'button'),
-      action('zotero', { doi: paper.doi }, '加入 Zotero 收藏夹', 'Zotero 同步已排队')),
-    paper.zotero && p((zoteroStates[paper.zotero.status] ?? paper.zotero.status) + (paper.zotero.error ? ' · ' + paper.zotero.error : ''), 'subtle'));
+      canManage && action('zotero', { doi: paper.doi }, '加入 Zotero 收藏夹', 'Zotero 同步已排队')),
+    canManage && paper.zotero && p((zoteroStates[paper.zotero.status] ?? paper.zotero.status) + (paper.zotero.error ? ' · ' + paper.zotero.error : ''), 'subtle'));
   const metadata = panel(kv({
     'DOI': external(paper.doi, 'https://doi.org/' + paper.doi.split('/').map(encodeURIComponent).join('/')),
     '题录来源': [external('Crossref', paper.crossref_url), paper.openalex_id ? ' · ' : null, paper.openalex_id && external('OpenAlex', paper.openalex_id)],
@@ -342,7 +345,7 @@ function synthesisList(entries) {
       })])))));
 }
 
-async function reportView(params) {
+async function reportView(params, canManage) {
   const selected = params.get('report');
   if (!selected) {
     const reports = await api('reports');
@@ -363,7 +366,7 @@ async function reportView(params) {
   const official = Object.fromEntries(data.counts.filter(row => row.status === 'included').map(row => [row.evidence_state, row.count]));
   const pending = data.counts.filter(row => row.status === 'pending').reduce((sum, row) => sum + row.count, 0);
   const excluded = data.counts.filter(row => row.status === 'excluded').reduce((sum, row) => sum + row.count, 0);
-  const reconciliation = report.delivery_channel === 'feishu' && ['uncertain','failed'].includes(report.delivery) && disclosure('核对飞书发送记录',
+  const reconciliation = canManage && report.delivery_channel === 'feishu' && ['uncertain','failed'].includes(report.delivery) && disclosure('核对飞书发送记录',
     form(async data => {
       await api('feishu-reconcile', { body: { period: selected, action: 'sent', checkedDelivered: data.checked === 'yes' } });
       errorMessage('已记录送达'); await load({ keepNotice: true });
@@ -420,21 +423,21 @@ function topicForm(topic) {
   el('div', { class: 'actions' }, button('保存选题', 'primary')));
 }
 
-async function topicView() {
+async function topicView(_params, canManage) {
   const topics = await api('topics');
   return [
     description('选题库', '记录证据、方法与执行条件'),
-    disclosure('新建选题', topicForm()),
+    canManage && disclosure('新建选题', topicForm()),
     topics.length ? list(...topics.map(topic => panel(el('h2', {}, topic.title),
       pills(pill(topicStatuses[topic.status], topic.status === 'saved' ? 'active' : '')),
       kv(Object.fromEntries(Object.entries(fieldsTopic).filter(([key]) => key !== 'title').map(([key, label]) => [label, topic.content[key]]))),
       p(['文献依据 · ', topic.content.dois.map(detail).flatMap((node, i) => i ? [' · ', node] : [node])], 'subtle'),
       topic.period && p(link(topic.period + ' 期简报', urlOf({ report: topic.period })), 'subtle'),
-      el('div', { class: 'actions' },
+      canManage && el('div', { class: 'actions' },
         topic.status !== 'saved' && action('topic-state', { id: topic.id, status: 'saved' }, '收藏选题', '已收藏'),
         topic.status !== 'archived' && action('topic-state', { id: topic.id, status: 'archived' }, '归档', '已归档')),
-      el('details', {}, el('summary', {}, '编辑选题'), topicForm(topic))))) : empty('暂无选题。')
-  ];
+      canManage && el('details', {}, el('summary', {}, '编辑选题'), topicForm(topic))))) : empty('暂无选题。')
+  ].filter(Boolean);
 }
 
 async function activity(params) {
@@ -479,16 +482,20 @@ async function load({ keepNotice = false } = {}) {
   try {
     const session = await api('session');
     if (id !== renderId) return;
-    if (!session.signedIn) { showLogin(); return; }
-    nav.hidden = logout.hidden = false;
+    readWithoutLogin = session.readWithoutLogin;
     const params = new URLSearchParams(location.search);
     const page = params.has('doi') ? 'library' : params.has('report') ? 'reports' : params.get('view') ?? (params.size ? 'library' : 'overview');
+    if (!session.signedIn && (!readWithoutLogin || page === 'activity')) { showLogin(); return; }
+    nav.hidden = false;
+    logout.hidden = !session.signedIn;
+    manageLogin.hidden = session.signedIn || !session.managementAvailable;
     for (const node of nav.querySelectorAll('a')) {
+      node.hidden = node.dataset.page === 'activity' && !session.signedIn;
       if (node.dataset.page === page) node.setAttribute('aria-current', 'page');
       else node.removeAttribute('aria-current');
     }
     const reader = params.has('doi') ? paperView : ({ overview, reports: reportView, topics: topicView, activity })[page] ?? library;
-    const content = await reader(params);
+    const content = await reader(params, session.signedIn);
     if (id === renderId) view.replaceChildren(...content);
   } catch (error) {
     if (id === renderId) view.replaceChildren(empty(error.message));
@@ -497,9 +504,14 @@ async function load({ keepNotice = false } = {}) {
   }
 }
 
+manageLogin.addEventListener('click', showLogin);
 logout.addEventListener('submit', async event => {
   event.preventDefault();
-  try { await api('logout', { body: {} }); showLogin(); }
+  try {
+    await api('logout', { body: {} });
+    if (readWithoutLogin && new URLSearchParams(location.search).get('view') === 'activity') location.assign('/?view=overview');
+    else await load();
+  }
   catch (error) { errorMessage(error.message, true); }
 });
 load();

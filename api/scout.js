@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-const getActions = new Set(['overview','library','paper','export','reports','report','topics','journals','activity','search']);
+const readActions = new Set(['overview','library','paper','export','reports','report','topics','journals']);
+const managementReads = new Set(['activity','search']);
 const postActions = new Set(['lookup','backfill','screen','document','judgment','topic','topic-state','zotero','retry','feishu-reconcile']);
 const cookieName = 'scout_session';
 const maxBody = 310000;
@@ -58,7 +59,9 @@ export default async function handler(req, res) {
   if (!url) return json(res, 400, { error: '请求地址无效' });
   const password = env.SCOUT_PASSWORD;
   const secret = env.SCOUT_SESSION_SECRET;
-  if (!password || password.length < 24 || !secret || secret.length < 32) return json(res, 503, { error: '请配置 Scout 登录密钥' });
+  const managementAvailable = (password?.length ?? 0) >= 24 && (secret?.length ?? 0) >= 32;
+  const signedIn = managementAvailable && session(req, secret);
+  const readWithoutLogin = env.VERCEL_ENV === 'preview';
   const action = url.searchParams.get('action');
   const isPost = req.method === 'POST';
   if (isPost && (req.headers.origin !== url.origin || !/^application\/json(?:;|$)/i.test(req.headers['content-type'] ?? ''))) {
@@ -67,13 +70,17 @@ export default async function handler(req, res) {
 
   const cookie = cookieName + '=';
   const attributes = '; Path=/; HttpOnly; SameSite=Lax' + (local ? '' : '; Secure');
-  if (action === 'session' && req.method === 'GET') return json(res, 200, { signedIn: Boolean(session(req, secret)) });
+  if (action === 'session' && req.method === 'GET') {
+    if (!managementAvailable && !readWithoutLogin) return json(res, 503, { error: '请配置 Scout 登录密钥' });
+    return json(res, 200, { signedIn, readWithoutLogin, managementAvailable });
+  }
   let body;
   if (isPost) {
     try { body = await payload(req); } catch { return json(res, 400, { error: '请求内容无法解析' }); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: '请求内容不符合限制' });
   }
   if (action === 'login' && isPost) {
+    if (!managementAvailable) return json(res, 503, { error: '请配置 Scout 管理登录密钥' });
     if (typeof body.password !== 'string' || !equal(body.password, password)) return json(res, 401, { error: '口令不正确' });
     const value = String(Date.now() + 43200000) + '.' + randomBytes(16).toString('base64url');
     res.setHeader('set-cookie', cookie + value + '.' + sign(value, secret) + attributes + '; Max-Age=43200');
@@ -83,8 +90,10 @@ export default async function handler(req, res) {
     res.setHeader('set-cookie', cookie + attributes + '; Max-Age=0');
     return json(res, 200, { signedIn: false });
   }
-  if (!session(req, secret)) return json(res, 401, { error: '请登录 Scout' });
-  if (!(req.method === 'GET' && getActions.has(action) || isPost && postActions.has(action))) return json(res, 404, { error: '未找到请求' });
+  const reading = req.method === 'GET' && readActions.has(action);
+  const managing = req.method === 'GET' && managementReads.has(action) || isPost && postActions.has(action);
+  if (!reading && !managing) return json(res, 404, { error: '未找到请求' });
+  if (!signedIn && !(readWithoutLogin && reading)) return json(res, 401, { error: '请登录 Scout 管理入口' });
 
   try {
     const target = new URL('/' + action, env.SCOUT_WORKER_URL);
@@ -97,6 +106,12 @@ export default async function handler(req, res) {
       method: req.method, headers: { authorization: 'Bearer ' + env.SCOUT_API_TOKEN, 'content-type': 'application/json' },
       ...(isPost ? { body: JSON.stringify(body) } : {}), redirect: 'error', signal: AbortSignal.timeout(20000)
     });
+    if (!signedIn && response.ok && (action === 'paper' || action === 'report')) {
+      const data = await response.json();
+      if (action === 'paper') delete data.zotero;
+      if (action === 'report') delete data.telegram_id;
+      return json(res, response.status, data);
+    }
     res.statusCode = response.status;
     for (const name of ['content-type','content-disposition']) {
       const value = response.headers.get(name);

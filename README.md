@@ -130,7 +130,7 @@ npx wrangler secret put CROSSREF_MAILTO
 | `SCOUT_PASSWORD` | 自行生成的至少 24 字符高熵访问口令 |
 | `SCOUT_SESSION_SECRET` | 自行生成的至少 32 字符随机签名密钥 |
 
-登录、Cookie 和 Worker token 由服务端校验。公开网页只含界面，数据、报告和导出均需要登录。链接可在登录后回到原简报。飞书卡片中的简报摘要对目标群成员可见，完整简报继续需要登录。
+登录、Cookie 和 Worker token 由服务端校验。Vercel Preview 在满足 Vercel 的访问保护后可直接查看研究总览、文献、简报和选题，并下载导出文件。任务管理、文献编辑、Zotero 写入和飞书核对通过「管理登录」进入。Production 的 Scout 登录策略独立于 Preview。
 
 ### 5. 试运行和启用
 
