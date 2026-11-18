@@ -151,6 +151,87 @@ function paperCard(item) {
     kv({ '论文类型': codes(item.codes?.types) || types.join(' ＋ ') || item.subtype || '待全文核验', '研究设计／方法': codes(item.codes?.methods) || methods.join('；') || '待全文核验', DOI: item.doi }));
 }
 
+function svgNode(tag, attributes = {}, label) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
+  if (label !== undefined) node.textContent = label;
+  return node;
+}
+
+function trendChart(months) {
+  const plot = svgNode('svg', { viewBox: '0 0 660 252', class: 'trend-chart', role: 'img',
+    'aria-label': '按发表月份统计的收录论文数量，具体数值见下方数据表' });
+  const max = Math.max(4, Math.ceil(Math.max(...months.map(row => row.count)) / 4) * 4);
+  const top = 18;
+  const bottom = 215;
+  const left = 42;
+  const step = 602 / months.length;
+  for (let i = 0; i <= 4; i++) {
+    const y = bottom - (bottom - top) * i / 4;
+    plot.append(svgNode('line', { x1: left, x2: 644, y1: y, y2: y, class: 'chart-gridline' }),
+      svgNode('text', { x: 32, y: y + 4, 'text-anchor': 'end' }, max * i / 4));
+  }
+  for (const [index, row] of months.entries()) {
+    const x = left + index * step + (step - 10) / 2;
+    const height = row.count / max * (bottom - top);
+    const bar = svgNode('rect', { x, y: bottom - height, width: 10, height, rx: 3,
+      class: row.partial ? 'trend-bar partial' : 'trend-bar' });
+    bar.append(svgNode('title', {}, row.month + '：' + row.count + ' 篇' + (row.partial ? '（非完整月）' : '')));
+    plot.append(bar);
+    if (index % 6 === 0 && index < months.length - 3 || index === months.length - 1) {
+      plot.append(svgNode('text', { x: x + 5, y: 237, 'text-anchor': 'middle' }, row.month.slice(2).replace('-', '/')));
+    }
+  }
+  return plot;
+}
+
+async function overview() {
+  const data = await api('overview');
+  const included = data.months.filter(row => row.status === 'included');
+  const totals = { included: 0, pending: 0, fulltext: 0 };
+  const monthly = new Map();
+  for (const row of data.months) {
+    totals[row.status] += row.count;
+    if (row.status !== 'included') continue;
+    monthly.set(row.month, (monthly.get(row.month) ?? 0) + row.count);
+    if (row.evidence_state === 'fulltext') totals.fulltext += row.count;
+  }
+  const cursor = new Date(data.lower.slice(0, 7) + '-01T00:00:00Z');
+  const months = [];
+  while (cursor.toISOString().slice(0, 7) <= data.upper.slice(0, 7)) {
+    const month = cursor.toISOString().slice(0, 7);
+    const lastDay = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+    months.push({ month, count: monthly.get(month) ?? 0, partial: month + '-01' < data.lower || lastDay > data.upper });
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  const domainMax = Math.max(1, ...data.domains.map(row => row.count));
+  return [
+    el('section', { class: 'overview-hero' },
+      el('div', {}, el('h1', {}, '研究总览'), p('传播学文献的收录趋势、领域分布与证据覆盖。'),
+        p(data.lower + ' 至 ' + data.upper + ' · 当前数据库', 'subtle'),
+        link('浏览文献库', '/?view=library', 'button')),
+      el('img', { class: 'overview-mascot', src: '/scout-avatar.webp', alt: '', width: 180, height: 180 })),
+    el('div', { class: 'metrics overview-metrics' }, [
+      ['已收录文献', totals.included], ['已获取完整正文', totals.fulltext],
+      ['待筛查', totals.pending], ['当前监测期刊', data.journals]
+    ].map(([label, count]) => el('div', { class: 'metric' }, el('span', {}, label), el('strong', {}, count.toLocaleString('zh-CN'))))),
+    el('div', { class: 'overview-grid' },
+      el('section', { class: 'panel chart-panel', 'aria-labelledby': 'trend-title' },
+        el('h2', { id: 'trend-title' }, '发表趋势'),
+        p('按发表月份统计已收录论文。薄荷色代表非完整月。数据反映 Scout 的收录范围。', 'subtle'),
+        included.length ? [trendChart(months), el('details', {}, el('summary', {}, '查看月度数据'),
+          table(['发表月份', '已收录论文'], months.map(row => [row.month + (row.partial ? '（非完整月）' : ''), row.count])))]
+          : p('文献库收录论文后，这里会显示月度趋势。', 'chart-empty')),
+      el('section', { class: 'panel chart-panel', 'aria-labelledby': 'fields-title' },
+        el('h2', { id: 'fields-title' }, '研究领域分布'),
+        p('同一篇论文可归入多个领域。点击领域查看文献。', 'subtle'),
+        data.domains.length ? el('ul', { class: 'domain-list' }, data.domains.map(row =>
+          el('li', {}, el('div', { class: 'domain-label' }, link(tags[row.tag], urlOf({ tag: row.tag })), el('strong', {}, row.count)),
+            el('progress', { max: domainMax, value: row.count, 'aria-hidden': 'true' }))))
+          : p('已收录论文添加领域标签后，这里会显示分布。', 'chart-empty')))
+  ];
+}
+
 async function library(params) {
   const args = Object.fromEntries([...params].filter(([key]) => ['q','tag','region','state','status','after'].includes(key)));
   const data = await api('library', { args });
@@ -395,12 +476,12 @@ async function load({ keepNotice = false } = {}) {
     if (!session.signedIn) { showLogin(); return; }
     nav.hidden = logout.hidden = false;
     const params = new URLSearchParams(location.search);
-    const page = params.has('doi') ? 'library' : params.has('report') ? 'reports' : params.get('view') ?? 'library';
+    const page = params.has('doi') ? 'library' : params.has('report') ? 'reports' : params.get('view') ?? (params.size ? 'library' : 'overview');
     for (const node of nav.querySelectorAll('a')) {
       if (node.dataset.page === page) node.setAttribute('aria-current', 'page');
       else node.removeAttribute('aria-current');
     }
-    const reader = params.has('doi') ? paperView : ({ reports: reportView, topics: topicView, activity })[page] ?? library;
+    const reader = params.has('doi') ? paperView : ({ overview, reports: reportView, topics: topicView, activity })[page] ?? library;
     const content = await reader(params);
     if (id === renderId) view.replaceChildren(...content);
   } catch (error) {

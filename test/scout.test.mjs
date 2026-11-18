@@ -113,6 +113,11 @@ test('real D1 migrations, discovery, screening, OA HTML, export and Zotero idemp
   assert.equal((await r.tick()).kind, 'lookup');
   assert.equal((await r.db.prepare('select count(*) AS n from papers').first()).n, 1);
   assert.equal((await r.request(paperPath).then(res => res.json())).first_seen, paper.first_seen);
+  assert.equal((await r.request('/overview', undefined, 'wrong')).status, 401);
+  const overview = await r.request('/overview').then(res => res.json());
+  assert.deepEqual(overview.months, [{ month: publication.slice(0, 7), status: 'included', evidence_state: 'fulltext', count: 1 }]);
+  assert.ok(overview.domains.some(row => row.tag === 'digital' && row.count === 1));
+  assert.equal(overview.journals, 2);
   const bib = await r.request('/export?format=bib&doi=' + encodeURIComponent(doi));
   assert.match(await bib.text(), /doi = \{10\.55555\/scout-example\}/);
   const ris = await r.request('/export?format=ris&doi=' + encodeURIComponent(doi));

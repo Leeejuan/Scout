@@ -31,6 +31,21 @@ function requireDoi(value) {
   return doi;
 }
 
+async function overview(s, now) {
+  const upper = day(now);
+  const lower = rollingStart(upper);
+  const [months, domains, journals] = await Promise.all([
+    s.all(`SELECT substr(published,1,7) AS month,status,evidence_state,count(*) AS count
+      FROM papers WHERE status IN ('included','pending') AND published BETWEEN ? AND ?
+      GROUP BY month,status,evidence_state ORDER BY month`, lower, upper),
+    s.all(`SELECT t.value AS tag,count(DISTINCT p.doi) AS count
+      FROM papers p JOIN json_each(p.tags) t WHERE p.status='included' AND p.published BETWEEN ? AND ?
+      AND t.type='text' GROUP BY t.value ORDER BY count DESC,tag`, lower, upper),
+    s.first("SELECT count(*) AS count FROM journals WHERE tier='pilot' OR ?='expanded'", s.env.JOURNAL_TIER ?? 'pilot')
+  ]);
+  return { lower, upper, months, domains: domains.filter(row => Object.hasOwn(TAGS, row.tag)), journals: journals.count };
+}
+
 async function library(s, params, now) {
   const limit = 18;
   const status = ['included','pending','excluded'].includes(params.get('status')) ? params.get('status') : 'included';
@@ -166,6 +181,7 @@ export async function route(s, request, now = new Date()) {
   const path = url.pathname;
   const params = url.searchParams;
   if (request.method === 'GET') {
+    if (path === '/overview') return reply(await overview(s, now));
     if (path === '/library') return reply(await library(s, params, now));
     if (path === '/paper') return reply(await paperDetails(s, requireDoi(params.get('doi'))));
     if (path === '/export') {
