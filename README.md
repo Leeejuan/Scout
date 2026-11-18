@@ -16,7 +16,7 @@ npm run test:live
 SCOUT_PROFILE=true npm run test:live
 ```
 
-- `npm test` 在独立的本地 workerd 和 D1 上执行，模拟 Workers AI、Zotero、Telegram 和文献接口。测试不需要密钥。
+- `npm test` 在独立的本地 workerd 和 D1 上执行，模拟 Workers AI、Zotero、飞书和文献接口。测试不需要密钥。
 - `npm run test:live` 用真实 DOI `10.1093/jcmc/zmaf025` 请求 Crossref 和 OpenAlex，然后在临时 D1 验证入库、去重、检索、详情和两种导出。若出版方类型字段无法自动核验，脚本按出版方页面做模拟人工筛查。测试只使用临时 D1。
 - `SCOUT_PROFILE=true` 用本地 V8 的活跃样本数估计 Worker JavaScript CPU，输出各任务的 `jsSamplingMs`、D1 行数、查询数和外部请求数。采样会漏掉短调用和原生解析开销，Cloudflare 平台的计费 CPU 仍需预览验证。
 - 本地网页登录需要把 `.env.example` 复制为 `.env.local`、把 `.dev.vars.example` 复制为 `.dev.vars.staging` 并填入同一个测试 API token。运行 `npm run worker:dev` 和 `npm run web:dev`。在本地 Worker 可用带 Bearer token 的 `POST /__tick` 领取一个任务，处理结束后刷新网页。也可用 `npm run test:live -- --serve` 临时预览测试 DOI，试用口令在该脚本中。
@@ -60,9 +60,26 @@ npx wrangler secret put SCOUT_API_TOKEN --env staging
 npx wrangler secret put OPENALEX_API_KEY --env staging
 ```
 
-测试环境默认无 Cron，也不使用真实 AI 或 Telegram。测量用的部署可临时设置测试 Worker 的 `WORKER_TICK_ENABLED=true`，用测试 API token 触发 `POST /__tick`。以真实大小的更新页、长正文、简报和 Zotero 列表分别跑样本，查看 **Workers → Observability** 的 CPU、日志指标和 D1 的 Row Metrics。任务页展示 D1 返回的阶段行数及请求计数，日志 `scout_tick` 含额外的维护语句和总耗时。CPU 接近 10 ms 或超限时，先降低 `CROSSREF_PAGE_ROWS`（1–6）或停用相应正文来源，再启用生产。 [Cloudflare Metrics](https://developers.cloudflare.com/workers/observability/metrics-and-analytics/)
+测试环境无 Cron，AI 额度为 0，飞书自动推送关闭。测量用的部署可临时设置测试 Worker 的 `WORKER_TICK_ENABLED=true`，用测试 API token 触发 `POST /__tick`。以真实大小的更新页、长正文、简报和 Zotero 列表分别跑样本，查看 **Workers → Observability** 的 CPU、日志指标和 D1 的 Row Metrics。任务页展示 D1 返回的阶段行数及请求计数，日志 `scout_tick` 含额外的维护语句和总耗时。CPU 接近 10 ms 或超限时，先降低 `CROSSREF_PAGE_ROWS`（1–6）或停用相应正文来源，再启用生产。 [Cloudflare Metrics](https://developers.cloudflare.com/workers/observability/metrics-and-analytics/)
 
-Zotero 用专用测试库（或空白收藏夹及测试 API key），同一 DOI 连续写入两次并检查库内条目和子笔记数量。Telegram 用测试 bot 和测试私聊，验证送达以及报告链接登录后可以打开。为验证真实的 AI 调用，把测试额度临时设为 300–600，借用额度前查账户余量。真实定时触发需生产启用后通过 Cron Events 核验。
+Zotero 用专用测试库（或空白收藏夹及测试 API key），同一 DOI 连续写入两次并检查库内条目和子笔记数量。飞书使用下方的独立测试入口验证送达和按钮跳转。为验证真实的 AI 调用，把测试额度临时设为 300–600，借用额度前查账户余量。真实定时触发需生产启用后通过 Cron Events 核验。
+
+#### 手动发送一张飞书测试卡片
+
+1. 在飞书群的机器人设置中复制完整 Webhook 地址和已启用签名校验的密钥。在 **Cloudflare → Workers & Pages → scout-worker-staging → Settings → Variables and Secrets** 新增两个 **Secret**，分别命名为 `FEISHU_WEBHOOK_URL`、`FEISHU_SIGNING_SECRET`。也可在项目目录运行以下命令，按提示分别粘贴。
+
+```sh
+npx wrangler secret put FEISHU_WEBHOOK_URL --env staging
+npx wrangler secret put FEISHU_SIGNING_SECRET --env staging
+```
+
+2. 确认 `.env.staging.local` 包含已部署的 `SCOUT_WORKER_URL` 和匹配的 `SCOUT_API_TOKEN`。在项目目录执行一次下方命令，把示例网址换成已连接 staging 的 Vercel Preview HTTPS 地址。也可先在 staging Worker 设置 `SCOUT_WEB_URL`，然后省略网址参数。
+
+```sh
+npm run feishu:test -- https://你的-preview.vercel.app
+```
+
+成功时终端确认飞书已接收。打开群内的「Scout 飞书推送测试」卡片，点「查看完整简报」，登录 Scout 后应看到测试简报。测试入口只在 staging 开启，需要 Worker token。测试无需生成报告，也无需开启自动推送、Cron 或 AI。若返回发送结果无法确认，先检查群内消息再决定是否重试。 [飞书自定义机器人指南](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot)
 
 ### 3. 建立生产 D1 与 Worker
 
@@ -76,8 +93,8 @@ npx wrangler secret put OPENALEX_API_KEY
 npx wrangler secret put ZOTERO_API_KEY
 npx wrangler secret put ZOTERO_LIBRARY_ID
 npx wrangler secret put ZOTERO_COLLECTION_KEY
-npx wrangler secret put TELEGRAM_BOT_TOKEN
-npx wrangler secret put TELEGRAM_CHAT_ID
+npx wrangler secret put FEISHU_WEBHOOK_URL
+npx wrangler secret put FEISHU_SIGNING_SECRET
 npx wrangler secret put SCOUT_WEB_URL
 # 可选，为 Crossref 提供联系人邮箱
 npx wrangler secret put CROSSREF_MAILTO
@@ -94,11 +111,12 @@ npx wrangler secret put CROSSREF_MAILTO
 | `OPENALEX_FULLTEXT_MAX_DAILY` | 可选，默认 0。最多 30 次带 key 的 OA TEI 下载，按当前每次 $0.01 计，使用 OpenAlex 免费账户时要核对同一账号其他用量 |
 | `ZOTERO_API_KEY`、`ZOTERO_LIBRARY_ID`、`ZOTERO_COLLECTION_KEY` | 指定可读写的用户库或群组库与 8 字符收藏夹 key |
 | `ZOTERO_LIBRARY_TYPE` | 默认 `users`，群组用 `groups` |
-| `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID` | Bot 密钥及数字聊天 ID，私聊需先向 bot 发消息 |
+| `FEISHU_WEBHOOK_URL`、`FEISHU_SIGNING_SECRET` | 飞书群自定义机器人的 Webhook 和签名校验密钥，均使用 Worker Secrets |
 | `SCOUT_WEB_URL` | Vercel 的 HTTPS 地址，供简报链接使用 |
 | `SCOUT_AI_DAILY_NEURONS` | 经账户用量核验后的上限，代码强制最高 6,000 |
 | `JOURNAL_TIER` | 默认试运行，填 `expanded` 启用扩展期刊 |
-| `SCHEDULE_ENABLED`、`TELEGRAM_ENABLED` | 均默认为 `false`，测试后按顺序开启 |
+| `SCHEDULE_ENABLED`、`FEISHU_ENABLED` | 自动检索和简报推送开关，均默认为 `false` |
+| `FEISHU_TEST_ENABLED` | 仅 staging 开启，允许使用 Worker token 手动发送测试卡片 |
 | `WORKER_TICK_ENABLED` | 生产保持 `false`，仅测试环境开放手工领取接口 |
 
 ### 4. 连接 Vercel Hobby
@@ -112,13 +130,13 @@ npx wrangler secret put CROSSREF_MAILTO
 | `SCOUT_PASSWORD` | 自行生成的至少 24 字符高熵访问口令 |
 | `SCOUT_SESSION_SECRET` | 自行生成的至少 32 字符随机签名密钥 |
 
-登录、Cookie 和 Worker token 由服务端校验。公开网页只含界面，数据、报告和导出均需要登录。链接可在登录后回到原简报。请将 Telegram 指向私人对话，因为消息正文含文献摘要或选题变化。
+登录、Cookie 和 Worker token 由服务端校验。公开网页只含界面，数据、报告和导出均需要登录。链接可在登录后回到原简报。飞书卡片中的简报摘要对目标群成员可见，完整简报继续需要登录。
 
 ### 5. 试运行和启用
 
 1. 在“任务与覆盖”用一个 DOI 试验，完成单篇筛查后打开详情和导出。初始清单两本期刊，确认流程后启动回填。
 2. 将 `SCHEDULE_ENABLED` 改为 `true`，部署后核验下一次 1 日或 16 日的运行。唯一 Cron 为 `*/10 * * * *`，每次最多领取一个任务。马来西亚时间 08:00 起安排该期更新，正常在更新核验完成后生成，11:00 起允许按当时的数据生成并注明尚未完成的任务。
-3. 配好 Telegram 私聊并验证独立测试后，开启 `TELEGRAM_ENABLED`。只有具备新增正文发现或选题变化的简报才推送。发送超时、服务端错误或中断后先在聊天中核对，再从简报页登记消息 ID 或明确确认未送达后重试。
+3. 飞书卡片验收通过后，在生产开启 `FEISHU_ENABLED`。只有具备新增正文发现或选题变化的简报才推送。发送超时、服务端错误或中断后先在群内核对，再从简报页确认已收到或确认未收到后重试。切换渠道时保留历史 Telegram 发送记录，历史待发送队列停止。
 4. 试运行稳定后，将 `JOURNAL_TIER` 设为 `expanded`，部署并启动扩展回填。期刊政策和期刊研究领域可在网页中核对。
 
 ## 证据和覆盖边界

@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const getActions = new Set(['overview','library','paper','export','reports','report','topics','journals','activity','search']);
-const postActions = new Set(['lookup','backfill','screen','document','judgment','topic','topic-state','zotero','retry','telegram-reconcile']);
+const postActions = new Set(['lookup','backfill','screen','document','judgment','topic','topic-state','zotero','retry','feishu-reconcile']);
 const cookieName = 'scout_session';
 const maxBody = 310000;
 

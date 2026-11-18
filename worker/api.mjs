@@ -3,6 +3,7 @@ import { planSearch } from './collection.mjs';
 import { documentStatements, localText } from './documents.mjs';
 import { exportCitation } from './export.mjs';
 import { hash, topicFields, topicSignature } from './reports.mjs';
+import { FEISHU_TEST_PERIOD, sendFeishuTest, testReport } from './feishu.mjs';
 import { screenType } from './sources.mjs';
 
 const headers = { 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' };
@@ -194,6 +195,7 @@ export async function route(s, request, now = new Date()) {
     }
     if (path === '/reports') return reply(await s.all(`SELECT period,window_start,window_end,generated,delivery,digest FROM reports ORDER BY period DESC LIMIT 48`));
     if (path === '/report') {
+      if (params.get('period') === FEISHU_TEST_PERIOD && s.env.FEISHU_TEST_ENABLED === 'true') return reply(testReport(now));
       const report = await s.first('SELECT * FROM reports WHERE period=?', params.get('period'));
       if (!report) throw new Problem(404, '该期简报尚未生成');
       return reply(withJson(report, { content: {} }));
@@ -220,6 +222,9 @@ export async function route(s, request, now = new Date()) {
   if (request.method !== 'POST') throw new Problem(405, '请求方法不支持');
   const data = parse(await limitedText(new Response(request.body), 310000), null);
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Problem(400, '需要有效 JSON 请求');
+  if (path === '/__feishu-test' && s.env.FEISHU_TEST_ENABLED === 'true') {
+    return reply(await sendFeishuTest(s, data.webUrl));
+  }
   if (path === '/lookup') {
     const doi = requireDoi(data.doi);
     const id = 'lookup:' + doi;
@@ -270,31 +275,31 @@ export async function route(s, request, now = new Date()) {
   if (path === '/retry') {
     if (typeof data.id !== 'string') throw new Problem(400, '需要任务 ID');
     const reset = await s.first(`UPDATE jobs SET status='queued',attempts=0,due=?,error=NULL
-      WHERE id=? AND status='dead' AND kind<>'telegram' RETURNING id`, now.valueOf(), data.id);
+      WHERE id=? AND status='dead' AND kind NOT IN ('telegram','feishu') RETURNING id`, now.valueOf(), data.id);
     if (!reset) throw new Problem(409, '该任务不可直接重试');
     return reply(reset);
   }
-  if (path === '/telegram-reconcile') {
+  if (path === '/feishu-reconcile') {
     const period = typeof data.period === 'string' ? data.period : '';
     const stamp = now.toISOString();
-    if (data.action === 'sent' && /^\d+$/.test(String(data.messageId))) {
-      const row = await s.first(`UPDATE reports SET delivery='sent',telegram_id=?,delivery_error=NULL,delivery_updated=?
-        WHERE period=? AND delivery IN ('uncertain','failed') RETURNING period`, String(data.messageId), stamp, period);
+    if (data.action === 'sent' && data.checkedDelivered === true) {
+      const row = await s.first(`UPDATE reports SET delivery='sent',delivery_error=NULL,delivery_updated=?
+        WHERE period=? AND delivery_channel='feishu' AND delivery IN ('uncertain','failed') RETURNING period`, stamp, period);
       if (!row) throw new Problem(409, '本期无需核对');
       return reply(row);
     }
-    if (data.action === 'retry' && data.checkedUndelivered === true && s.env.TELEGRAM_ENABLED === 'true') {
+    if (data.action === 'retry' && data.checkedUndelivered === true && s.env.FEISHU_ENABLED === 'true') {
       const [change] = await s.batch([
         s.stmt(`UPDATE reports SET delivery='pending',delivery_error=NULL,delivery_updated=?
-          WHERE period=? AND delivery IN ('uncertain','failed') RETURNING period`, stamp, period),
+          WHERE period=? AND delivery_channel='feishu' AND delivery IN ('uncertain','failed') RETURNING period`, stamp, period),
         s.stmt(`UPDATE jobs SET status='queued',attempts=0,due=?,error=NULL WHERE id=? AND status<>'running'
-          AND EXISTS(SELECT 1 FROM reports WHERE period=? AND delivery='pending' AND delivery_updated=?)`,
-          now.valueOf(), 'telegram:' + period, period, stamp)
+          AND EXISTS(SELECT 1 FROM reports WHERE period=? AND delivery_channel='feishu' AND delivery='pending' AND delivery_updated=?)`,
+          now.valueOf(), 'feishu:' + period, period, stamp)
       ]);
       if (!change.results.length) throw new Problem(409, '本期无法重新发送');
       return reply({ period, queued: true });
     }
-    throw new Problem(400, '需要记录消息 ID，或确认聊天中未收到再重试');
+    throw new Problem(400, '请先在飞书群内核对是否收到该期简报');
   }
   throw new Problem(404, '未找到接口');
 }

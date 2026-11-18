@@ -1,7 +1,8 @@
 import { Problem, parse, service } from './core.mjs';
 import { discover, enrich, fulltext, lookup } from './collection.mjs';
 import { extract } from './extraction.mjs';
-import { generateReport, schedule, sendTelegram } from './reports.mjs';
+import { generateReport, schedule } from './reports.mjs';
+import { sendFeishuReport } from './feishu.mjs';
 import { zotero } from './zotero.mjs';
 
 const handlers = {
@@ -10,7 +11,7 @@ const handlers = {
   enrich: (s, job, now) => enrich(s, job.payload, now),
   fulltext: (s, job, now) => fulltext(s, job.payload, now),
   extract, report: (s, job, now) => generateReport(s, job.payload, now),
-  telegram: (s, job, now) => sendTelegram(s, job.payload, now),
+  feishu: (s, job, now) => sendFeishuReport(s, job.payload, now),
   zotero: (s, job, now) => zotero(s, job.payload, now)
 };
 
@@ -60,8 +61,8 @@ export async function tick(env, now = new Date()) {
     ];
     if (job.kind === 'zotero' && error) statements.push(s.stmt('UPDATE zotero_sync SET status=?,updated=?,error=? WHERE doi=?',
       result.dead ? 'failed' : 'retry', now.toISOString(), error, job.payload.doi));
-    if (job.kind === 'telegram' && result.dead) statements.push(s.stmt(`UPDATE reports SET delivery='failed',delivery_updated=?,
-      delivery_error=? WHERE period=? AND delivery='pending'`, now.toISOString(), error, job.payload.period));
+    if (job.kind === 'feishu' && result.dead) statements.push(s.stmt(`UPDATE reports SET delivery='failed',delivery_updated=?,
+      delivery_error=? WHERE period=? AND delivery_channel='feishu' AND delivery='pending'`, now.toISOString(), error, job.payload.period));
     await s.batch(statements);
     summary = { kind: job.kind, outcome, rowsRead: s.usage.read, rowsWritten: s.usage.written,
       external: s.usage.external, d1Statements: s.usage.queries + 1, elapsedMs: Date.now() - started };

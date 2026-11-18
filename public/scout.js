@@ -23,7 +23,7 @@ const codeNames = { systematic_review: '系统综述', scoping_review: '范围�
 const codes = values => (values ?? []).map(value => codeNames[value] ?? value).join(' ＋ ');
 const delivery = { skipped: '本期未推送', pending: '待推送', sending: '发送中', sent: '已确认送达', uncertain: '待核对', failed: '发送失败' };
 const kinds = { lookup: 'DOI 检索', discover: '期刊检索', enrich: 'OpenAlex 核验', fulltext: '正文', extract: '证据分析',
-  report: '生成简报', telegram: 'Telegram', zotero: 'Zotero' };
+  report: '生成简报', feishu: '飞书', telegram: 'Telegram（历史）', zotero: 'Zotero' };
 const jobs = { queued: '待处理', running: '处理中', done: '已完成', dead: '失败', progress: '可继续', retry: '将重试', deferred: '已延后', failed: '失败' };
 const topicStatuses = { candidate: 'Scout 候选', saved: '已收藏', archived: '已归档' };
 const zoteroStates = { queued: '已排队', synced: '条目及笔记已核对', item_saved: '条目已核对，暂无分析笔记', retry: '等待重试', failed: '写入失败' };
@@ -354,19 +354,25 @@ async function reportView(params) {
     ];
   }
   const report = await api('report', { args: { period: selected } });
+  if (report.demo) return [
+    description('Scout 飞书测试简报', '用于验证「查看完整简报」的跳转'),
+    panel(p(report.content.synthesisState)),
+    link('查看简报列表', urlOf({ view: 'reports' }), 'button')
+  ];
   const data = report.content;
   const official = Object.fromEntries(data.counts.filter(row => row.status === 'included').map(row => [row.evidence_state, row.count]));
   const pending = data.counts.filter(row => row.status === 'pending').reduce((sum, row) => sum + row.count, 0);
   const excluded = data.counts.filter(row => row.status === 'excluded').reduce((sum, row) => sum + row.count, 0);
-  const reconciliation = ['uncertain','failed'].includes(report.delivery) && disclosure('核对 Telegram 发送记录',
+  const reconciliation = report.delivery_channel === 'feishu' && ['uncertain','failed'].includes(report.delivery) && disclosure('核对飞书发送记录',
     form(async data => {
-      await api('telegram-reconcile', { body: { period: selected, action: 'sent', messageId: data.messageId } });
+      await api('feishu-reconcile', { body: { period: selected, action: 'sent', checkedDelivered: data.checked === 'yes' } });
       errorMessage('已记录送达'); await load({ keepNotice: true });
-    }, field('已收到的消息 ID', 'messageId', { required: true, inputmode: 'numeric', pattern: '[0-9]+' }), button('标记已收到')),
+    }, el('label', {}, el('input', { type: 'checkbox', name: 'checked', value: 'yes', required: true }), '已在飞书群内看到该期简报'),
+    button('标记已收到')),
     form(async data => {
-      await api('telegram-reconcile', { body: { period: selected, action: 'retry', checkedUndelivered: data.checked === 'yes' } });
+      await api('feishu-reconcile', { body: { period: selected, action: 'retry', checkedUndelivered: data.checked === 'yes' } });
       errorMessage('已重新排队'); await load({ keepNotice: true });
-    }, el('label', {}, el('input', { type: 'checkbox', name: 'checked', value: 'yes', required: true }), '已核对 Telegram，确认该期尚未送达'),
+    }, el('label', {}, el('input', { type: 'checkbox', name: 'checked', value: 'yes', required: true }), '已核对飞书群，确认该期尚未送达'),
     button('重新排队')));
   return [
     link('返回简报列表', urlOf({ view: 'reports' }), 'subtle'),
@@ -456,7 +462,7 @@ async function activity(params) {
       [kinds[row.kind] ?? row.kind, jobs[row.status] ?? row.status, row.count])) : p('暂无任务。', 'subtle')),
     section('最近任务与 D1 用量', data.events.length ? table(['时间（UTC）', '任务', '结果', '读取行', '写入行', '请求数'],
       data.events.map(row => [row.at, row.job_id, [jobs[row.outcome] ?? row.outcome, ' · ', row.detail ?? '',
-        row.outcome === 'failed' && !row.job_id.startsWith('telegram:') ? action('retry', { id: row.job_id }, '重试', '任务已排队') : null],
+        row.outcome === 'failed' && !/^(?:feishu|telegram):/.test(row.job_id) ? action('retry', { id: row.job_id }, '重试', '任务已排队') : null],
         display(row.rows_read), display(row.rows_written), display(row.subrequests)])) : p('暂无执行记录。', 'subtle')),
     section('AI 预算（UTC）', data.budget.length ? table(['日期','已预留 Neurons','已计调用'], data.budget.map(row =>
       [row.utc_day, row.neurons, row.calls])) : p('暂无已预留的调用。', 'subtle')),

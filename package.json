@@ -10,7 +10,8 @@
     "worker:dev": "wrangler dev --env staging --local --test-scheduled",
     "db:local": "wrangler d1 migrations apply SCOUT_DB --env staging --local",
     "deploy:check": "wrangler deploy --env staging --dry-run",
-    "web:dev": "node --env-file=.env.local scripts/local-web.mjs"
+    "web:dev": "node --env-file=.env.local scripts/local-web.mjs",
+    "feishu:test": "node --env-file=.env.staging.local scripts/feishu-test.mjs"
   },
   "engines": {
     "node": "24.x"

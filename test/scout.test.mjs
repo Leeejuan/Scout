@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { runtime } from '../scripts/test-runtime.mjs';
@@ -33,6 +34,26 @@ function publisherHtml(doiValue = doi, type = 'Research Article') {
     ('Users adjusted their privacy settings. We ran an experiment with 38 participants. ').repeat(10) + '</p>').join('');
   return '<meta name="citation_doi" content="' + doiValue + '"><meta name="citation_article_type" content="' +
     type + '"><div class="article-body">' + body + '</div>';
+}
+
+const feishuWebhook = 'https://open.feishu.cn/open-apis/bot/v2/hook/synthetic-scout';
+const feishuSecret = 'synthetic-feishu-signing-secret';
+const feishuBindings = { FEISHU_WEBHOOK_URL: feishuWebhook, FEISHU_SIGNING_SECRET: feishuSecret };
+
+async function assertFeishuCard(request, reportUrl) {
+  assert.equal(request.url, feishuWebhook);
+  assert.equal(request.method, 'POST');
+  const message = await request.json();
+  assert.match(message.timestamp, /^\d{10}$/);
+  assert.ok(Math.abs(Date.now() / 1000 - Number(message.timestamp)) < 60);
+  const expected = createHmac('sha256', message.timestamp + '\n' + feishuSecret).digest('base64');
+  assert.equal(message.sign, expected);
+  assert.equal(message.msg_type, 'interactive');
+  assert.equal(message.card.schema, '2.0');
+  const button = message.card.body.elements.find(item => item.tag === 'button');
+  assert.equal(button.text.content, '查看完整简报');
+  assert.deepEqual(button.behaviors, [{ type: 'open_url', default_url: reportUrl }]);
+  return message.card;
 }
 
 const jsonVersion = (data, version, extra) => Response.json(data, { headers: { 'Last-Modified-Version': String(version), ...extra } });
@@ -180,21 +201,20 @@ test('UTC reservation includes failure, concurrency and smaller caps', async t =
   assert.equal(capped.filter(result => result.result).length, 2);
 });
 
-test('scheduled report persists before Telegram and ambiguous outcomes never auto-republish', async t => {
+test('scheduled report persists before Feishu and ambiguous outcomes never auto-republish', async t => {
   let calls = 0;
   let persisted;
   let r;
   const http = async req => {
     if (new URL(req.url).hostname === 'api.crossref.org') return Response.json({ message: { items: [], 'total-results': 0 } });
-    if (new URL(req.url).hostname !== 'api.telegram.org') throw new Error('unexpected external request');
+    if (new URL(req.url).hostname !== 'open.feishu.cn') throw new Error('unexpected external request');
     persisted = await r.db.prepare('SELECT delivery FROM reports WHERE period=?').bind('2026-12-16').first();
-    const message = await req.json();
-    assert.match(message.text, /https:\/\/scout\.example\/\?report=2026-12-16/);
+    const card = await assertFeishuCard(req, 'https://scout.example/?report=2026-12-16');
+    assert.match(card.body.elements[0].text.content, /Finding/);
     calls++;
-    return Response.json({ ok: false }, { status: 500 });
+    return Response.json({ code: 10000 }, { status: 500 });
   };
-  r = await runtime({ http, bindings: { SCHEDULE_ENABLED: 'true', TELEGRAM_ENABLED: 'true',
-    SCOUT_WEB_URL: 'https://scout.example', TELEGRAM_BOT_TOKEN: '123:synthetic', TELEGRAM_CHAT_ID: '456' } });
+  r = await runtime({ http, bindings: { SCHEDULE_ENABLED: 'true', FEISHU_ENABLED: 'true', SCOUT_WEB_URL: 'https://scout.example', ...feishuBindings } });
   t.after(r.close);
   const future = '2026-12-16T03:00:00Z';
   const before = '2026-12-16T00:00:00Z';
@@ -213,17 +233,18 @@ test('scheduled report persists before Telegram and ambiguous outcomes never aut
   assert.equal((await r.db.prepare('SELECT COUNT(*) AS n FROM searches').first()).n, 1);
   const report = await r.request('/report?period=2026-12-16').then(res => res.json());
   assert.equal(report.delivery, 'pending');
+  assert.equal(report.delivery_channel, 'feishu');
   assert.equal(report.content.relationships.citations.length, 1);
   assert.equal(report.content.relationships.similarity.length, 1);
   assert.equal(report.content.synthesis.disagreements[0].compare.length, 2);
   assert.equal(report.content.synthesis.disagreements[0].compare[0].dimensions.measurement, null);
   assert.equal((await r.request('/topics').then(res => res.json())).length, 1);
-  assert.equal((await r.tick(future)).kind, 'telegram');
+  assert.equal((await r.tick(future)).kind, 'feishu');
   assert.deepEqual(persisted, { delivery: 'sending' });
   assert.equal((await r.request('/report?period=2026-12-16').then(res => res.json())).delivery, 'uncertain');
   await r.tick(future);
   assert.equal(calls, 1);
-  assert.equal((await r.request('/telegram-reconcile', { period: '2026-12-16', action: 'sent', messageId: '786' })).status, 200);
+  assert.equal((await r.request('/feishu-reconcile', { period: '2026-12-16', action: 'sent', checkedDelivered: true })).status, 200);
   assert.equal((await r.request('/report?period=2026-12-16').then(res => res.json())).delivery, 'sent');
 });
 
@@ -278,28 +299,61 @@ test('local text retains PDF locators and accepts only attributable manual evide
   assert.equal(matches.rows[0].doi, doi);
 });
 
-test('Telegram confirms one delivery when repeated jobs compete', async t => {
+test('Feishu confirms one delivery when repeated jobs compete', async t => {
   let outgoing = 0;
   const http = async request => {
-    assert.equal(new URL(request.url).hostname, 'api.telegram.org');
+    await assertFeishuCard(request, 'https://scout.example/?report=2026-12-16');
     outgoing++;
-    return Response.json({ ok: true, result: { message_id: 42 } });
+    return Response.json({ code: 0, msg: 'success' });
   };
-  const r = await runtime({ http, bindings: { TELEGRAM_ENABLED: 'true', TELEGRAM_BOT_TOKEN: '123:synthetic',
-    TELEGRAM_CHAT_ID: '456', SCOUT_WEB_URL: 'https://scout.example' } });
+  const r = await runtime({ http, bindings: { FEISHU_ENABLED: 'true', SCOUT_WEB_URL: 'https://scout.example', ...feishuBindings } });
   t.after(r.close);
   const period = '2026-12-16';
   const now = new Date();
-  await r.db.prepare(`INSERT INTO reports(period,window_start,window_end,generated,content,delivery)
-    VALUES(?,'2026-12-01','2026-12-15',?,'{}','pending')`).bind(period, now.toISOString()).run();
+  await r.db.prepare(`INSERT INTO reports(period,window_start,window_end,generated,content,delivery,delivery_channel)
+    VALUES(?,'2026-12-01','2026-12-15',?,'{}','pending','feishu')`).bind(period, now.toISOString()).run();
   for (let i = 0; i < 2; i++) {
-    await r.db.prepare("INSERT INTO jobs(id,kind,payload,priority,due) VALUES(?,'telegram',?,5,?)")
-      .bind('telegram-test:' + i, JSON.stringify({ period }), now.valueOf()).run();
+    await r.db.prepare("INSERT INTO jobs(id,kind,payload,priority,due) VALUES(?,'feishu',?,5,?)")
+      .bind('feishu-test:' + i, JSON.stringify({ period }), now.valueOf()).run();
   }
   await Promise.all([r.tick(), r.tick()]);
   await r.tick();
   const report = await r.request('/report?period=' + period).then(res => res.json());
   assert.equal(outgoing, 1);
-  assert.equal(report.telegram_id, '42');
   assert.equal(report.delivery, 'sent');
+});
+
+test('signed staging card is gated and links to an authenticated demo report without scheduling', async t => {
+  let calls = 0;
+  const http = async request => {
+    const card = await assertFeishuCard(request, 'https://scout-preview.example/?report=feishu-test');
+    assert.match(card.header.title.content, /推送测试/);
+    calls++;
+    return calls === 1 ? Response.json({ code: 19021, msg: 'signature invalid' }) :
+      Response.json({ StatusCode: 0, StatusMessage: 'success' });
+  };
+  const input = { webUrl: 'https://scout-preview.example' };
+  const disabled = await runtime({ http, bindings: feishuBindings });
+  t.after(disabled.close);
+  assert.equal((await disabled.request('/__feishu-test', input)).status, 404);
+  assert.equal((await disabled.request('/report?period=feishu-test')).status, 404);
+  const r = await runtime({ http, bindings: { ...feishuBindings, FEISHU_TEST_ENABLED: 'true',
+    SCHEDULE_ENABLED: 'false', FEISHU_ENABLED: 'false', SCOUT_AI_DAILY_NEURONS: '0' } });
+  t.after(r.close);
+  assert.equal((await r.request('/__feishu-test', input, 'unauthorized')).status, 401);
+  assert.equal((await r.request('/__feishu-test', { webUrl: 'http://scout-preview.example' })).status, 422);
+  assert.equal(calls, 0);
+  const rejected = await r.request('/__feishu-test', input);
+  assert.equal(rejected.status, 422);
+  assert.match((await rejected.json()).error, /签名校验失败/);
+  const response = await r.request('/__feishu-test', input);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { sent: true, reportUrl: 'https://scout-preview.example/?report=feishu-test' });
+  assert.equal(calls, 2);
+  assert.equal((await r.request('/report?period=feishu-test', undefined, 'unauthorized')).status, 401);
+  const demo = await r.request('/report?period=feishu-test').then(res => res.json());
+  assert.equal(demo.demo, true);
+  assert.deepEqual(await r.request('/reports').then(res => res.json()), []);
+  assert.deepEqual((await r.request('/activity').then(res => res.json())).budget, []);
+  assert.equal((await r.db.prepare('SELECT count(*) AS count FROM jobs').first()).count, 0);
 });

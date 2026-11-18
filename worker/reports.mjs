@@ -1,4 +1,4 @@
-import { day, enqueueStmt, httpsUrl, myDate, parse, periodWindow, Problem, rollingStart, shift, TAGS } from './core.mjs';
+import { day, enqueueStmt, myDate, parse, periodWindow, rollingStart, shift, TAGS } from './core.mjs';
 import { planSearch } from './collection.mjs';
 import { completion } from './extraction.mjs';
 
@@ -190,9 +190,9 @@ export async function generateReport(s, { period, tier, updateId, deadline }, no
   const shouldSend = Boolean(findings.length || topicRows.length);
   const digest = shouldSend ? await hash(JSON.stringify({ findings: findings.map(row => [row.doi, row.quote]),
     topics: topicRows.map(row => [row.signature, row.dois]) })) : null;
-  const delivery = shouldSend && s.env.TELEGRAM_ENABLED === 'true' ? 'pending' : 'skipped';
+  const delivery = shouldSend && s.env.FEISHU_ENABLED === 'true' ? 'pending' : 'skipped';
   await s.batch([
-    s.stmt('INSERT OR IGNORE INTO reports(period,window_start,window_end,generated,content,digest,delivery,delivery_updated) VALUES (?,?,?,?,?,?,?,?)',
+    s.stmt("INSERT OR IGNORE INTO reports(period,window_start,window_end,generated,content,digest,delivery,delivery_updated,delivery_channel) VALUES (?,?,?,?,?,?,?,?,'feishu')",
       period, window.start, window.end, stamp, JSON.stringify(content), digest, delivery, stamp),
     ...signals.map(signal => s.stmt('INSERT OR IGNORE INTO report_signals VALUES(?,?)', signal, period)),
     ...topicRows.map(row => s.stmt(`INSERT INTO topics(id,title,content,signature,created,updated,period) VALUES (?,?,?,?,?,?,?)
@@ -201,55 +201,7 @@ export async function generateReport(s, { period, tier, updateId, deadline }, no
         json_set(topics.content,'$.dois',json_extract(excluded.content,'$.dois')) END,
       updated=excluded.updated,period=excluded.period`,
       row.signature.slice(0, 24), row.title, JSON.stringify({ ...row, signature: undefined, change: undefined }), row.signature, stamp, stamp, period)),
-    ...(delivery === 'pending' ? [enqueueStmt(s, 'telegram:' + period, 'telegram', { period }, 5)] : [])
+    ...(delivery === 'pending' ? [enqueueStmt(s, 'feishu:' + period, 'feishu', { period }, 5)] : [])
   ]);
   return { detail: '简报已写入 D1，推送状态 ' + delivery };
-}
-
-export async function sendTelegram(s, { period }, now) {
-  if (s.env.TELEGRAM_ENABLED !== 'true') return { detail: 'Telegram 未启用' };
-  const base = httpsUrl(s.env.SCOUT_WEB_URL);
-  const token = s.env.TELEGRAM_BOT_TOKEN;
-  const chat = s.env.TELEGRAM_CHAT_ID;
-  if (!base || !/^\d+:[A-Za-z0-9_-]+$/.test(token ?? '') || !/^-?\d+$/.test(chat ?? '')) {
-    throw new Problem(422, 'Telegram 或站点链接配置缺失');
-  }
-  const stamp = now.toISOString();
-  const report = await s.first(`UPDATE reports SET delivery='sending',delivery_updated=?,delivery_error=NULL
-    WHERE period=? AND delivery='pending' RETURNING content`, stamp, period);
-  if (!report) return { detail: '本期无待推送简报' };
-  const data = parse(report.content, {});
-  const findings = (data.findings ?? []).slice(0, 3).map(item => '• ' + item.title.slice(0, 160) + '\n  ' + item.value.slice(0, 170) + '\n  DOI ' + item.doi);
-  const topics = (data.synthesis?.topics ?? []).slice(0, 2).map(item => '• ' + item.change + ' · ' + item.title.slice(0, 145));
-  const link = new URL('/?report=' + encodeURIComponent(period), base);
-  const message = ['Scout 传播研究简报 · ' + period, ...findings, ...topics, link.href].join('\n\n');
-  let delivery = 'uncertain';
-  let id = null;
-  let error = null;
-  let retry = null;
-  try {
-    const response = await s.request('https://api.telegram.org/bot' + token + '/sendMessage', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chat, text: message, link_preview_options: { is_disabled: true } })
-    });
-    const result = await response.json();
-    if (response.ok && result.ok === true && Number.isInteger(result.result?.message_id)) {
-      delivery = 'sent';
-      id = String(result.result.message_id);
-    } else if (response.status === 429 && result.ok === false) {
-      delivery = 'pending';
-      retry = now.valueOf() + Math.max(Number(result.parameters?.retry_after) || 60, 60) * 1000;
-      error = 'Telegram 限速，已延后';
-    } else if (response.status >= 400 && response.status < 500 && result.ok === false) {
-      delivery = 'failed';
-      error = 'Telegram 拒绝发送（HTTP ' + response.status + '）';
-    } else {
-      error = 'Telegram 发送结果无法确认';
-    }
-  } catch {
-    error = 'Telegram 响应丢失或超时，等待人工核对';
-  }
-  await s.run(`UPDATE reports SET delivery=?,telegram_id=?,delivery_updated=?,delivery_error=? WHERE period=? AND delivery='sending'`,
-    delivery, id, stamp, error, period);
-  return { retry, detail: error ?? 'Telegram 已确认' };
 }
