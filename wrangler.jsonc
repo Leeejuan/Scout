@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "scout-worker",
+  "main": "worker/index.mjs",
+  "compatibility_date": "2026-01-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "d1_databases": [
+    { "binding": "SCOUT_DB", "database_name": "scout-evidence", "database_id": "00000000-0000-0000-0000-000000000001", "migrations_dir": "migrations" }
+  ],
+  "ai": { "binding": "AI", "remote": true },
+  "triggers": { "crons": ["*/10 * * * *"] },
+  "vars": { "SCOUT_AI_DAILY_NEURONS": "6000", "SCHEDULE_ENABLED": "false", "TELEGRAM_ENABLED": "false", "WORKER_TICK_ENABLED": "false" },
+  "env": {
+    "staging": {
+      "name": "scout-worker-staging",
+      "preview_urls": false,
+      "triggers": { "crons": [] },
+      "d1_databases": [
+        { "binding": "SCOUT_DB", "database_name": "scout-evidence-staging", "database_id": "00000000-0000-0000-0000-000000000002", "migrations_dir": "migrations" }
+      ],
+      "ai": { "binding": "AI", "remote": false },
+      "vars": { "SCOUT_AI_DAILY_NEURONS": "0", "SCHEDULE_ENABLED": "false", "TELEGRAM_ENABLED": "false", "WORKER_TICK_ENABLED": "false" }
+    }
+  }
+}

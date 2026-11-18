@@ -1,0 +1,22 @@
+{
+  "name": "scout-communication-research",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
+    "test:live": "node scripts/live-check.mjs",
+    "worker:dev": "wrangler dev --env staging --local --test-scheduled",
+    "db:local": "wrangler d1 migrations apply SCOUT_DB --env staging --local",
+    "deploy:check": "wrangler deploy --env staging --dry-run",
+    "web:dev": "node --env-file=.env.local scripts/local-web.mjs"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "devDependencies": {
+    "miniflare": "5.20261117.0-beta",
+    "wrangler": "4.164.0"
+  }
+}

@@ -1,0 +1,7 @@
+# Copy to .dev.vars.staging for local development. Never commit real values.
+SCOUT_API_TOKEN=
+WORKER_TICK_ENABLED=true
+# Optional: helps Crossref route requests to its polite pool.
+CROSSREF_MAILTO=
+# Optional: enrich DOI metadata on the free OpenAlex plan.
+OPENALEX_API_KEY=
