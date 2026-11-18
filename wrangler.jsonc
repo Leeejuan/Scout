@@ -18,7 +18,7 @@
       "preview_urls": false,
       "triggers": { "crons": [] },
       "d1_databases": [
-        { "binding": "SCOUT_DB", "database_name": "scout-evidence-staging", "database_id": "00000000-0000-0000-0000-000000000002", "migrations_dir": "migrations" }
+        { "binding": "SCOUT_DB", "database_name": "scout-evidence-staging", "database_id": "ca5ebee8-8ba8-4b50-aeb5-c30495c28e53", "migrations_dir": "migrations" }
       ],
       "ai": { "binding": "AI", "remote": false },
       "vars": { "SCOUT_AI_DAILY_NEURONS": "0", "SCHEDULE_ENABLED": "false", "TELEGRAM_ENABLED": "false", "WORKER_TICK_ENABLED": "false" }
