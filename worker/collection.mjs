@@ -60,7 +60,7 @@ export async function planSearch(s, { id, mode, lower, upper, tier }, now) {
     start = shift(end, 1);
   }
   await s.batch([
-    s.stmt('INSERT OR IGNORE INTO searches VALUES (?,?,?,?,?,?)', id, mode, now.toISOString(), lower, upper, JSON.stringify(issns)),
+    s.stmt('INSERT INTO searches VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET journals=excluded.journals', id, mode, now.toISOString(), lower, upper, JSON.stringify(issns)),
     ...(mode === 'backfill' && tier === 'expanded' ? [s.stmt(`INSERT OR IGNORE INTO search_slices(
       search_id,issn,lower_date,upper_date,cursor,pages,returned,omitted,total_expected,omissions,done)
       SELECT ?,x.issn,x.lower_date,x.upper_date,x.cursor,x.pages,x.returned,x.omitted,x.total_expected,x.omissions,x.done

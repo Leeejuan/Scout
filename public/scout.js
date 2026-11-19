@@ -15,7 +15,8 @@ const fieldsTopic = { title: '选题标题', question: '研究问题', contribut
 const tags = { theory: '传播理论', intrapersonal: '自我／内在传播', interpersonal: '人际传播', groups: '群体传播',
   mass: '大众传播', organizations: '组织传播', 'media-management': '媒体管理', global: '全球／跨文化传播',
   digital: '数字媒体', political: '战略／政治传播', 'strategic-pr': '公共关系', 'health-risk': '健康／环境／风险传播',
-  journalism: '新闻学', marketing: '市场传播、广告与品牌传播' };
+  journalism: '新闻学', marketing: '市场传播、广告与品牌传播', strategy: '战略传播',
+  intercultural: '跨文化传播', health: '健康传播', environment: '环境传播', risk: '风险沟通' };
 const codeNames = { systematic_review: '系统综述', scoping_review: '范围综述', narrative_review: '叙事综述',
   research_article: '研究论文', theoretical_article: '理论／概念论文', replication: '复现研究', meta_analysis: '元分析',
   survey: '问卷调查', experiment: '实验', interview: '访谈', focus_group: '焦点小组', content_analysis: '内容分析',
@@ -56,7 +57,19 @@ const list = (...content) => el('div', { class: 'list' }, content);
 const pills = (...content) => el('div', { class: 'pills' }, content);
 const section = (title, ...content) => el('section', { class: 'section' }, el('h2', {}, title), content);
 const kv = entries => el('dl', {}, Object.entries(entries).flatMap(([key, val]) => [el('dt', {}, key), el('dd', {}, val)]));
-const authors = people => people.slice(0, 5).map(person => person.name).join('、') + (people.length > 5 ? ' 等' : '');
+const authorKey = person => [person.orcid, person.id].find(id => /^https:\/\/(?:orcid\.org\/[\dX-]+|openalex\.org\/A\d+)$/i.test(id ?? ''));
+const authorLink = person => link(person.name, urlOf({ view: 'author', name: person.name,
+  ...(authorKey(person) ? { author: authorKey(person) } : {}) }));
+const authors = (people, limit = 5) => people.slice(0, limit).flatMap((person, index) =>
+  index ? ['、', authorLink(person)] : [authorLink(person)]).concat(people.length > limit ? [' 等'] : []);
+const domainLink = tag => link(tags[tag] ?? tag, urlOf({ view: 'research', tag }), 'pill');
+function pagination(data, args, key = 'page') {
+  if (data.page <= 1 && !data.more) return null;
+  return el('div', { class: 'actions pager', 'aria-label': '分页' },
+    data.page > 1 && link('上一页', urlOf({ ...args, [key]: data.page - 1 }), 'button'),
+    el('span', { class: 'subtle' }, '第 ' + data.page + ' 页'),
+    data.more && link('下一页', urlOf({ ...args, [key]: data.page + 1 }), 'button'));
+}
 const description = (title, subtitle, cls) => el('div', {}, el('h1', { class: cls }, title), p(subtitle, 'subtle'));
 const asList = content => el('ul', {}, content.map(item => el('li', {}, item)));
 const display = value => value ?? '—';
@@ -145,10 +158,11 @@ function paperCard(item) {
   const types = item.labels.filter(label => label.field === 'article_type').map(label => label.value);
   const methods = item.labels.filter(label => label.field !== 'article_type').map(label => label.value);
   return el('article', { class: 'paper' },
+    el('label', { class: 'compare-choice' }, el('input', { type: 'checkbox', name: 'paper', value: item.doi }), '加入对照'),
     el('h2', {}, link(item.title, urlOf({ doi: item.doi }))),
-    p(item.journal + ' · ' + item.published + (item.authors.length ? ' · ' + authors(item.authors) : ''), 'subtle'),
+    p([item.journal + ' · ' + item.published, item.authors.length ? ' · ' : '', authors(item.authors)], 'subtle'),
     pills(pill(levels[item.evidence_state], item.evidence_state === 'record' ? 'pending' : 'active'),
-      item.tags.map(tag => pill(tags[tag] ?? tag)), item.regions.map(region => pill(regions[region] ?? region))),
+      item.tags.map(domainLink), item.regions.map(region => pill(regions[region] ?? region))),
     kv({ '论文类型': codes(item.codes?.types) || types.join(' ＋ ') || item.subtype || '待全文核验', '研究设计／方法': codes(item.codes?.methods) || methods.join('；') || '待全文核验', DOI: item.doi }));
 }
 
@@ -159,8 +173,8 @@ function svgNode(tag, attributes = {}, label) {
   return node;
 }
 
-function trendChart(months) {
-  const plot = svgNode('svg', { viewBox: '0 0 660 252', class: 'trend-chart', role: 'img',
+function trendChart(months, tag) {
+  const plot = svgNode('svg', { viewBox: '0 0 660 252', class: 'trend-chart', role: 'group',
     'aria-label': '按发表月份统计的收录论文数量，具体数值见下方数据表' });
   const max = Math.max(4, Math.ceil(Math.max(...months.map(row => row.count)) / 4) * 4);
   const top = 18;
@@ -178,7 +192,12 @@ function trendChart(months) {
     const bar = svgNode('rect', { x, y: bottom - height, width: 10, height, rx: 3,
       class: row.partial ? 'trend-bar partial' : 'trend-bar' });
     bar.append(svgNode('title', {}, row.month + '：' + row.count + ' 篇' + (row.partial ? '（非完整月）' : '')));
-    plot.append(bar);
+    if (row.count) {
+      const destination = urlOf({ view: 'library', month: row.month, ...(tag ? { tag } : {}) });
+      const target = svgNode('a', { href: destination, 'aria-label': row.month + ' · ' + row.count + ' 篇' });
+      target.append(bar);
+      plot.append(target);
+    } else plot.append(bar);
     if (index % 6 === 0 && index < months.length - 3 || index === months.length - 1) {
       plot.append(svgNode('text', { x: x + 5, y: 237, 'text-anchor': 'middle' }, row.month.slice(2).replace('-', '/')));
     }
@@ -186,8 +205,40 @@ function trendChart(months) {
   return plot;
 }
 
-async function overview() {
-  const data = await api('overview');
+function monthSeries(lower, upper, monthly) {
+  const cursor = new Date(lower.slice(0, 7) + '-01T00:00:00Z');
+  const months = [];
+  while (cursor.toISOString().slice(0, 7) <= upper.slice(0, 7)) {
+    const month = cursor.toISOString().slice(0, 7);
+    const lastDay = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+    months.push({ month, count: monthly.get(month) ?? 0, partial: month + '-01' < lower || lastDay > upper });
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return months;
+}
+
+function directionsPanel(data, args) {
+  const directions = data.directions;
+  return section('近期研究方向 · 近 90 天',
+    p('来自近期论文正文中作者提出的未来研究建议。点击论文可核对原文。', 'subtle'),
+    directions.rows.length ? el('div', { class: 'direction-list' }, directions.rows.map(row =>
+      el('article', { class: 'panel direction-card' },
+        el('h3', {}, link(row.title, urlOf({ doi: row.doi }))),
+        p(row.published, 'subtle'), evidence({ ...row, level: 'fulltext', origin: 'author' }))))
+      : empty('当前样本还没有可展示的近期正文建议。'),
+    pagination(directions, args, 'directions'));
+}
+
+function domainDistribution(rows) {
+  const max = Math.max(1, ...rows.map(row => row.count));
+  return el('ul', { class: 'domain-list domain-grid' }, rows.map(row => el('li', {},
+    el('div', { class: 'domain-label' }, domainLink(row.tag), el('strong', {}, row.count)),
+    el('progress', { max, value: row.count, 'aria-label': tags[row.tag] + ' ' + row.count + ' 篇' }))));
+}
+
+async function overview(params) {
+  const directionPage = params.get('directions') ?? '1';
+  const [data, research] = await Promise.all([api('overview'), api('research', { args: { directionPage } })]);
   const included = data.months.filter(row => row.status === 'included');
   const totals = { included: 0, pending: 0, fulltext: 0 };
   const monthly = new Map();
@@ -197,15 +248,7 @@ async function overview() {
     monthly.set(row.month, (monthly.get(row.month) ?? 0) + row.count);
     if (row.evidence_state === 'fulltext') totals.fulltext += row.count;
   }
-  const cursor = new Date(data.lower.slice(0, 7) + '-01T00:00:00Z');
-  const months = [];
-  while (cursor.toISOString().slice(0, 7) <= data.upper.slice(0, 7)) {
-    const month = cursor.toISOString().slice(0, 7);
-    const lastDay = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
-    months.push({ month, count: monthly.get(month) ?? 0, partial: month + '-01' < data.lower || lastDay > data.upper });
-    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
-  }
-  const domainMax = Math.max(1, ...data.domains.map(row => row.count));
+  const months = monthSeries(data.lower, data.upper, monthly);
   return [
     el('section', { class: 'overview-hero' },
       el('div', {}, el('h1', {}, '研究总览'), p('传播学文献的收录趋势、领域分布与证据覆盖。'),
@@ -213,32 +256,138 @@ async function overview() {
         link('浏览文献库', '/?view=library', 'button')),
       el('img', { class: 'overview-mascot', src: '/scout-avatar.webp', alt: '', width: 180, height: 180 })),
     el('div', { class: 'metrics overview-metrics' }, [
-      ['已收录文献', totals.included], ['已获取完整正文', totals.fulltext],
-      ['待筛查', totals.pending], ['当前监测期刊', data.journals]
+      ['库内记录总数', data.stats.total], ['近三年正式收录', totals.included], ['近三年完整正文', totals.fulltext],
+      ['近三年待筛查', totals.pending], ['已有正文提取', data.stats.extracted], ['有人工核验证据', data.stats.reviewed],
+      ['当前配置的监测期刊', data.journals]
     ].map(([label, count]) => el('div', { class: 'metric' }, el('span', {}, label), el('strong', {}, count.toLocaleString('zh-CN'))))),
-    el('div', { class: 'overview-grid' },
-      el('section', { class: 'panel chart-panel', 'aria-labelledby': 'trend-title' },
-        el('h2', { id: 'trend-title' }, '发表趋势'),
-        p('按发表月份统计已收录论文。薄荷色代表非完整月。数据反映 Scout 的收录范围。', 'subtle'),
-        included.length ? [trendChart(months), el('details', {}, el('summary', {}, '查看月度数据'),
-          table(['发表月份', '已收录论文'], months.map(row => [row.month + (row.partial ? '（非完整月）' : ''), row.count])))]
-          : p('文献库收录论文后，这里会显示月度趋势。', 'chart-empty')),
-      el('section', { class: 'panel chart-panel', 'aria-labelledby': 'fields-title' },
-        el('h2', { id: 'fields-title' }, '研究领域分布'),
-        p('同一篇论文可归入多个领域。点击领域查看文献。', 'subtle'),
-        data.domains.length ? el('ul', { class: 'domain-list' }, data.domains.map(row =>
-          el('li', {}, el('div', { class: 'domain-label' }, link(tags[row.tag], urlOf({ tag: row.tag })), el('strong', {}, row.count)),
-            el('progress', { max: domainMax, value: row.count, 'aria-hidden': 'true' }))))
-          : p('已收录论文添加领域标签后，这里会显示分布。', 'chart-empty')))
+    el('section', { class: 'panel chart-panel', 'aria-labelledby': 'trend-title' },
+      el('h2', { id: 'trend-title' }, '发表趋势'),
+      p('按发表月份统计已收录论文。薄荷色代表非完整月。范围限于 Scout 的收录样本。', 'subtle'),
+      publicationTrend(months, included.length)),
+    section('研究领域分布',
+      p('显示所有配置领域，包括当前为 0 篇的领域。同一篇论文可有多个领域标签。', 'subtle'),
+      domainDistribution(research.domains)),
+    section('近 90 天各领域发表量',
+      p('按论文发表日期统计 Scout 已收录样本。点击领域可查看相应论文和证据。', 'subtle'),
+      domainDistribution(research.domains.map(row => ({ ...row, count: row.recent })).sort((a,b) => b.count - a.count))),
+    directionsPanel(research, { view: 'overview' })
+  ];
+}
+
+function publicationTrend(months, count, tag) {
+  return count ? [trendChart(months, tag), el('details', {}, el('summary', {}, '查看月度数据'),
+    table(['发表月份', '已收录论文'], months.map(row => [
+      row.month + (row.partial ? '（非完整月）' : ''),
+      link(String(row.count), urlOf({ view: 'library', month: row.month, ...(tag ? { tag } : {}) }))
+    ])))] : p('文献库收录论文后，这里会显示月度趋势。', 'chart-empty');
+}
+
+function compactPapers(rows) {
+  return list(...rows.map(row => el('article', { class: 'paper compact-paper' },
+    el('h3', {}, link(row.title, urlOf({ doi: row.doi }))),
+    p([row.journal + ' · ' + row.published + ' · ', authors(row.authors)], 'subtle'),
+    pills(pill(levels[row.evidence_state]), row.tags.map(domainLink)))));
+}
+
+function unpackPapers(rows) {
+  return rows.map(row => ({ ...row, authors: JSON.parse(row.authors), tags: JSON.parse(row.tags) }));
+}
+
+async function researchView(params) {
+  const tag = params.get('tag') || '';
+  const page = params.get('page') ?? '1';
+  const directionPage = params.get('directions') ?? '1';
+  const args = { view: 'research', ...(tag ? { tag } : {}) };
+  const data = await api('research', { args: { tag, page, directionPage } });
+  if (!tag) return [
+    description('研究领域', '按领域查看核心期刊、证据覆盖和已收录研究。'),
+    domainDistribution(data.domains),
+    section('领域来源与覆盖', table(['领域','近三年收录','完整正文','近 90 天发表','配置期刊'],
+      data.domains.map(row => [domainLink(row.tag), row.count, row.fulltext, row.recent, row.sources.length])))
+  ];
+  const domain = data.domains.find(row => row.tag === tag);
+  const months = monthSeries(data.lower, data.upper, new Map(data.months.map(row => [row.month, row.count])));
+  return [
+    link('全部研究领域', urlOf({ view: 'research' }), 'subtle'),
+    description(tags[tag], data.lower + ' 至 ' + data.upper + ' · Scout 已收录样本'),
+    el('div', { class: 'metrics' }, [['近三年收录', domain.count], ['完整正文', domain.fulltext], ['近 90 天发表', domain.recent], ['配置期刊', domain.sources.length]]
+      .map(([label, count]) => el('div', { class: 'metric' }, el('strong', {}, count), el('span', {}, label)))),
+    section('领域发表趋势', panel(publicationTrend(months, domain.count, tag))),
+    directionsPanel(data, { ...args, page }),
+    section('理论与方法', data.dimensions.length ? table(['证据类别','原文归纳','论文数'], data.dimensions.map(row =>
+      [fields[row.field], link(row.value, urlOf({ view: 'library', tag, field: row.field, value: row.value })), row.count]))
+      : empty('当前领域尚无可展示的正文理论或方法证据。')),
+    section('期刊来源', domain.sources.length ? table(['期刊','采集状态','同行评审政策'], domain.sources.map(row =>
+      [link(row.name, urlOf({ view: 'library', issn: row.issn })), !row.active ? '等待启用扩展清单' : row.searched ? '已有完成的检索分片' : '暂无完成记录', external('出版社', row.policy_url)]))
+      : empty('当前领域尚未配置专门的期刊来源。')),
+    section('领域文献', data.papers.rows.length ? compactPapers(unpackPapers(data.papers.rows)) : empty('本页暂无论文。'),
+      pagination(data.papers, { ...args, directions: directionPage }))
+  ];
+}
+
+async function authorView(params) {
+  const page = params.get('page') ?? '1';
+  const args = Object.fromEntries([...params].filter(([key]) => ['author','name'].includes(key)));
+  const data = await api('author', { args: { ...args, page } });
+  const rows = unpackPapers(data.rows);
+  const collaborators = new Map();
+  for (const paper of rows) for (const person of paper.authors) {
+    const key = authorKey(person) ?? person.name;
+    if (args.author && [person.orcid, person.id].includes(args.author) || !args.author && person.name.toLowerCase() === args.name?.toLowerCase()) continue;
+    const entry = collaborators.get(key) ?? { person, papers: [] };
+    entry.papers.push(paper);
+    collaborators.set(key, entry);
+  }
+  return [
+    description(data.display, 'Scout 近三年收录 ' + data.count + ' 篇 · ' + (data.identified ? '按 ORCID 或 OpenAlex ID 匹配' : '按姓名匹配，可能包括同名作者')),
+    section('作者发表的论文', rows.length ? compactPapers(rows) : empty('暂无已收录论文。'), pagination(data, { view: 'author', ...args })),
+    section('本页论文的共同作者', collaborators.size ? table(['作者','共同署名论文'], [...collaborators.values()].map(entry =>
+      [authorLink(entry.person), asList(entry.papers.map(row => link(row.title, urlOf({ doi: row.doi }))))])) : empty('暂无可展示的共同署名。'))
+  ];
+}
+
+async function comparisonView(params) {
+  const dois = [...new Set(params.getAll('paper'))];
+  if (dois.length < 2 || dois.length > 4) return [
+    description('论文证据对照', '每次选择 2–4 篇论文。'),
+    link('返回文献库选择论文', urlOf({ view: 'library' }), 'button')
+  ];
+  const papers = await Promise.all(dois.map(doi => api('paper', { args: { doi } })));
+  return [
+    link('返回文献库', urlOf({ view: 'library' }), 'subtle'),
+    description('论文证据对照', '选择论文后，可以按同一维度核对证据和适用条件。'),
+    table(['比较维度', ...papers.map(paper => link(paper.title, urlOf({ doi: paper.doi })))], [
+      ['证据覆盖', ...papers.map(paper => levels[paper.evidence_state])],
+      ...Object.entries(fields).map(([field, label]) => [label, ...papers.map(paper => {
+        const rows = paper.judgments.filter(row => row.field === field && row.level === 'fulltext');
+        return rows.length ? el('details', {}, el('summary', {}, rows[0].value),
+          rows.map(row => evidence(row))) : '暂无正文证据';
+      })])
+    ])
+  ];
+}
+
+async function relationsView(params) {
+  const doi = params.get('anchor');
+  const page = params.get('page') ?? '1';
+  const data = await api('relations', { args: { doi, page } });
+  return [
+    link('返回论文 · ' + doi, urlOf({ doi }), 'subtle'),
+    description('文献关系', '关系基于 Scout 中已索引的参考文献标识符。'),
+    ...[['该文引用的库内论文', data.outgoing], ['引用该文的库内论文', data.incoming]].map(([title, result]) =>
+      section(title, result.rows.length ? compactPapers(unpackPapers(result.rows)) : empty('本页暂无已核对的文献关系。'))),
+    pagination({ page: data.outgoing.page, more: data.outgoing.more || data.incoming.more }, { view: 'relations', anchor: doi })
   ];
 }
 
 async function library(params, canManage) {
-  const args = Object.fromEntries([...params].filter(([key]) => ['q','tag','region','state','status','after'].includes(key)));
+  const args = Object.fromEntries([...params].filter(([key]) => ['q','tag','region','state','status','after','page','month','issn','field','value'].includes(key)));
   const data = await api('library', { args });
   const counts = Object.fromEntries(data.counts.filter(row => row.status === 'included').map(row => [row.evidence_state, row.count]));
   const pending = data.counts.filter(row => row.status === 'pending').reduce((sum, row) => sum + row.count, 0);
   const filters = el('form', { class: 'filters', method: 'get' },
+    el('input', { type: 'hidden', name: 'view', value: 'library' }),
+    ['month','issn','field','value'].filter(key => args[key]).map(key => el('input', { type: 'hidden', name: key, value: args[key] })),
     el('label', { class: 'query' }, '搜索文献、证据或 DOI', el('input', { type: 'search', name: 'q', value: args.q ?? '', placeholder: '关键词或 DOI' })),
     select('收录状态', 'status', stat, args.status ?? 'included'),
     select('领域', 'tag', { '': '全部领域', ...tags }, args.tag ?? ''),
@@ -250,9 +399,16 @@ async function library(params, canManage) {
     el('div', { class: 'metrics' }, [ ...Object.entries(levels).map(([key, label]) => [label, counts[key] ?? 0]), ['待筛查', pending] ]
       .map(([label, count]) => el('div', { class: 'metric' }, el('strong', {}, count), el('span', {}, label)))),
     filters,
-    data.rows.length ? list(...data.rows.map(paperCard)) : empty(
+    (args.month || args.issn || args.value) && p(['限定范围 · ', [args.month,args.issn,args.value].filter(Boolean).join(' · '), ' · ',
+      link('清除限定', urlOf({ view: 'library', ...(args.tag ? { tag: args.tag } : {}) }))], 'subtle'),
+    data.rows.length ? el('form', { action: '/', method: 'get', class: 'compare-form' },
+      el('input', { type: 'hidden', name: 'view', value: 'compare' }),
+      el('div', { class: 'actions' }, button('对照所选论文（2–4 篇）', 'primary')),
+      list(...data.rows.map(paperCard))) : empty(
       args.status === 'pending' ? '暂无待筛查的 DOI。' : '此筛选范围内暂无文献。' + (canManage ? '可在任务与覆盖页检索 DOI 或启动回填。' : '')),
-    data.next && link('下一页', urlOf({ ...args, after: data.next }), 'button')
+    ...(args.after ? [link('返回第一页', urlOf({ ...args, after: '' }), 'button'),
+      data.next && link('下一页', urlOf({ ...args, after: data.next }), 'button')]
+      : [pagination({ page: data.page, more: Boolean(data.next) }, { ...args, view: 'library' })])
   ].filter(Boolean);
 }
 
@@ -320,9 +476,11 @@ async function paperView(params, canManage) {
       location.license ? ' · ' + location.license : null, location.source && ' · ', location.source && external('OpenAlex 来源', location.source)])));
   return [
     link('返回文献库', urlOf({ status: paper.status }), 'subtle'),
-    description(paper.title, paper.journal + ' · ' + paper.published + (paper.authors.length ? ' · ' + authors(paper.authors) : ''), 'paper-title'),
-    pills(pill(levels[paper.evidence_state], 'active'), paper.tags.map(tag => pill(tags[tag] ?? tag)),
+    description(paper.title, paper.journal + ' · ' + paper.published, 'paper-title'),
+    paper.authors.length && p(authors(paper.authors, 160), 'subtle'),
+    pills(pill(levels[paper.evidence_state], 'active'), paper.tags.map(domainLink),
       paper.regions.map(region => pill((regions[region] ?? region) + ' · 文本线索'))),
+    link('查看文献关系', urlOf({ view: 'relations', anchor: paper.doi }), 'button'),
     metadata, downloads, oa, section('摘要', p(paper.abstract ?? '尚未取得摘要。'), paper.abstract_source && external('查看摘要来源', paper.abstract_source)),
     section('证据与判断', ...Object.entries(fields).map(([key, label]) => {
       const rows = paper.judgments.filter(row => row.field === key);
@@ -346,12 +504,12 @@ function synthesisList(entries) {
 async function reportView(params, canManage) {
   const selected = params.get('report');
   if (!selected) {
-    const reports = await api('reports');
+    const reports = await api('reports', { args: { page: params.get('page') ?? '1' } });
     return [
       description('半月简报', '每月 1 日与 16 日 · 马来西亚时间'),
-      reports.length ? list(...reports.map(report => panel(el('h2', {}, link(report.period + ' 期', urlOf({ report: report.period }))),
+      reports.rows.length ? list(...reports.rows.map(report => panel(el('h2', {}, link(report.period + ' 期', urlOf({ report: report.period }))),
         p(report.window_start + ' 至 ' + report.window_end + ' · ' + delivery[report.delivery], 'subtle')))) :
-        empty('暂无已生成的简报。')
+        empty('本页暂无简报。'), pagination(reports, { view: 'reports' })
     ];
   }
   const report = await api('report', { args: { period: selected } });
@@ -421,12 +579,12 @@ function topicForm(topic) {
   el('div', { class: 'actions' }, button('保存选题', 'primary')));
 }
 
-async function topicView(_params, canManage) {
-  const topics = await api('topics');
+async function topicView(params, canManage) {
+  const topics = await api('topics', { args: { page: params.get('page') ?? '1' } });
   return [
     description('选题库', '记录证据、方法与执行条件'),
     canManage && disclosure('新建选题', topicForm()),
-    topics.length ? list(...topics.map(topic => panel(el('h2', {}, topic.title),
+    topics.rows.length ? list(...topics.rows.map(topic => panel(el('h2', {}, topic.title),
       pills(pill(topicStatuses[topic.status], topic.status === 'saved' ? 'active' : '')),
       kv(Object.fromEntries(Object.entries(fieldsTopic).filter(([key]) => key !== 'title').map(([key, label]) => [label, topic.content[key]]))),
       p(['文献依据 · ', topic.content.dois.map(detail).flatMap((node, i) => i ? [' · ', node] : [node])], 'subtle'),
@@ -434,7 +592,7 @@ async function topicView(_params, canManage) {
       canManage && el('div', { class: 'actions' },
         topic.status !== 'saved' && action('topic-state', { id: topic.id, status: 'saved' }, '收藏选题', '已收藏'),
         topic.status !== 'archived' && action('topic-state', { id: topic.id, status: 'archived' }, '归档', '已归档')),
-      canManage && el('details', {}, el('summary', {}, '编辑选题'), topicForm(topic))))) : empty('暂无选题。')
+      canManage && el('details', {}, el('summary', {}, '编辑选题'), topicForm(topic))))) : empty('本页暂无选题。'), pagination(topics, { view: 'topics' })
   ].filter(Boolean);
 }
 
@@ -489,10 +647,10 @@ async function load({ keepNotice = false } = {}) {
     manageLogin.hidden = session.signedIn || !session.managementAvailable;
     for (const node of nav.querySelectorAll('a')) {
       node.hidden = node.dataset.page === 'activity' && !session.signedIn;
-      if (node.dataset.page === page) node.setAttribute('aria-current', 'page');
+      if (node.dataset.page === (['author','relations','compare'].includes(page) ? 'library' : page)) node.setAttribute('aria-current', 'page');
       else node.removeAttribute('aria-current');
     }
-    const reader = params.has('doi') ? paperView : ({ overview, reports: reportView, topics: topicView, activity })[page] ?? library;
+    const reader = params.has('doi') ? paperView : ({ overview, research: researchView, author: authorView, relations: relationsView, compare: comparisonView, reports: reportView, topics: topicView, activity })[page] ?? library;
     const content = await reader(params, session.signedIn);
     if (id === renderId) view.replaceChildren(...content);
   } catch (error) {

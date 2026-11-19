@@ -121,3 +121,17 @@ input[type=checkbox] { width: auto; min-height: 0; justify-self: start; }
 .domain-list progress::-webkit-progress-value { background: #7770d7; border-radius: 10px; }
 .domain-list progress::-moz-progress-bar { background: #7770d7; border-radius: 10px; }
 @media (max-width: 920px) { .overview-grid { grid-template-columns: 1fr; } }
+
+.domain-grid { grid-template-columns: repeat(auto-fit,minmax(min(100%,15rem),1fr)); gap: .8rem; }
+.domain-grid li { background: var(--surface); padding: .65rem .8rem; border: 1px solid var(--line); border-radius: 12px; }
+.domain-label .pill { text-decoration: none; line-height: 1.35; white-space: normal; text-align: left; }
+.domain-label .pill:hover { text-decoration: underline; }
+.direction-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,19rem),1fr)); gap: .75rem; }
+.direction-card { margin: 0; }
+.direction-card .evidence { padding-bottom: 0; }
+.pager { align-items: center; justify-content: flex-end; margin-top: 1rem; }
+.compact-paper p { margin-bottom: .55rem; }
+.compare-choice { display: flex; align-items: center; justify-content: flex-end; gap: .4rem; color: var(--muted); font-size: .8rem; }
+.compare-choice input { margin: 0; }
+.compare-form { margin-top: 1rem; }
+.trend-chart a:hover .trend-bar, .trend-chart a:focus-visible .trend-bar { fill: var(--accent); }

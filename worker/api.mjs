@@ -1,3 +1,4 @@
+import { authorProfile, listPage, pageNumber, paperRelations, research } from './research.mjs';
 import { day, enqueueStmt, FIELDS, httpsUrl, limitedText, normalizeDoi, parse, Problem, researchCodes, rollingStart, TAGS } from './core.mjs';
 import { planSearch } from './collection.mjs';
 import { documentStatements, localText } from './documents.mjs';
@@ -35,20 +36,25 @@ function requireDoi(value) {
 async function overview(s, now) {
   const upper = day(now);
   const lower = rollingStart(upper);
-  const [months, domains, journals] = await Promise.all([
+  const [months, domains, journals, stats] = await Promise.all([
     s.all(`SELECT substr(published,1,7) AS month,status,evidence_state,count(*) AS count
       FROM papers WHERE status IN ('included','pending') AND published BETWEEN ? AND ?
       GROUP BY month,status,evidence_state ORDER BY month`, lower, upper),
     s.all(`SELECT t.value AS tag,count(DISTINCT p.doi) AS count
       FROM papers p JOIN json_each(p.tags) t WHERE p.status='included' AND p.published BETWEEN ? AND ?
       AND t.type='text' GROUP BY t.value ORDER BY count DESC,tag`, lower, upper),
-    s.first("SELECT count(*) AS count FROM journals WHERE tier='pilot' OR ?='expanded'", s.env.JOURNAL_TIER ?? 'pilot')
+    s.first("SELECT count(*) AS count FROM journals WHERE tier='pilot' OR ?='expanded'", s.env.JOURNAL_TIER ?? 'pilot'),
+    s.first(`SELECT count(*) AS total,
+      count(*) FILTER (WHERE EXISTS(SELECT 1 FROM judgments e WHERE e.doi=p.doi AND e.level='fulltext')) AS extracted,
+      count(*) FILTER (WHERE EXISTS(SELECT 1 FROM judgments e WHERE e.doi=p.doi AND e.level='fulltext' AND e.reviewed=1)) AS reviewed
+      FROM papers p`)
   ]);
-  return { lower, upper, months, domains: domains.filter(row => Object.hasOwn(TAGS, row.tag)), journals: journals.count };
+  return { lower, upper, months, domains: domains.filter(row => Object.hasOwn(TAGS, row.tag)), journals: journals.count, stats };
 }
 
 async function library(s, params, now) {
   const limit = 18;
+  const page = pageNumber(params);
   const status = ['included','pending','excluded'].includes(params.get('status')) ? params.get('status') : 'included';
   const query = (params.get('q') ?? '').trim().slice(0, 180);
   const tag = params.get('tag');
@@ -76,6 +82,20 @@ async function library(s, params, now) {
     filters.push('p.evidence_state=?');
     args.push(state);
   }
+  const directionField = params.get('field');
+  const direction = (params.get('value') ?? '').slice(0, 650);
+  if (['theory','design','methods'].includes(directionField) && direction) {
+    filters.push("p.evidence_state='fulltext' AND EXISTS(SELECT 1 FROM judgments x WHERE x.doi=p.doi AND x.field=? AND x.value=? AND x.level='fulltext')");
+    args.push(directionField, direction);
+  }
+  if (params.get('month') && /^\d{4}-\d{2}$/.test(params.get('month'))) {
+    filters.push('substr(p.published,1,7)=?');
+    args.push(params.get('month'));
+  }
+  if (params.get('issn') && /^\d{4}-[\dX]{4}$/.test(params.get('issn'))) {
+    filters.push('p.issn=?');
+    args.push(params.get('issn'));
+  }
   if (/^\d{4}-\d\d-\d\d$/.test(cursor[0]) && normalizeDoi(cursor[1])) {
     filters.push('(p.published<? OR p.published=? AND p.doi>?)');
     args.push(cursor[0], cursor[0], cursor[1]);
@@ -85,7 +105,7 @@ async function library(s, params, now) {
       (SELECT field,value,level FROM judgments WHERE doi=p.doi AND field IN ('article_type','design','methods')
         ORDER BY reviewed DESC,field,level DESC LIMIT 5) v) AS labels
     FROM papers p JOIN journals j USING(issn) WHERE ${filters.join(' AND ')}
-    ORDER BY p.published DESC,p.doi LIMIT ?`, ...args, limit + 1);
+    ORDER BY p.published DESC,p.doi LIMIT ? OFFSET ?`, ...args, limit + 1, after ? 0 : (page - 1) * limit);
   const more = papers.length > limit;
   const rows = papers.slice(0, limit).map(row => {
     const unpacked = withJson(row, { authors: [], tags: [], regions: [], labels: [] });
@@ -93,7 +113,7 @@ async function library(s, params, now) {
   });
   const counts = await s.all(`SELECT status,evidence_state,count(*) AS count FROM papers
     WHERE published BETWEEN ? AND ? GROUP BY status,evidence_state`, rollingStart(date), date);
-  return { rows, counts, lower: rollingStart(date), upper: date, next: more ? rows.at(-1).published + '|' + rows.at(-1).doi : null };
+  return { rows, counts, page, lower: rollingStart(date), upper: date, next: more ? rows.at(-1).published + '|' + rows.at(-1).doi : null };
 }
 
 async function screen(s, data, now) {
@@ -182,6 +202,9 @@ export async function route(s, request, now = new Date()) {
   const path = url.pathname;
   const params = url.searchParams;
   if (request.method === 'GET') {
+    if (path === '/research') return reply(await research(s, params, now));
+    if (path === '/author') return reply(await authorProfile(s, params, now));
+    if (path === '/relations') return reply(await paperRelations(s, params));
     if (path === '/overview') return reply(await overview(s, now));
     if (path === '/library') return reply(await library(s, params, now));
     if (path === '/paper') return reply(await paperDetails(s, requireDoi(params.get('doi'))));
@@ -192,6 +215,13 @@ export async function route(s, request, now = new Date()) {
       return new Response(exportCitation({ ...paper, authors: JSON.stringify(paper.authors), citation: JSON.stringify(paper.citation) }, format),
         { headers: { ...headers, 'content-type': format === 'bib' ? 'application/x-bibtex; charset=utf-8' : 'application/x-research-info-systems; charset=utf-8',
           'content-disposition': 'attachment; filename="scout.' + format + '"' } });
+    }
+    if (path === '/reports' && params.has('page')) {
+      return reply(await listPage(s, params, 'SELECT period,window_start,window_end,generated,delivery,digest FROM reports ORDER BY period DESC'));
+    }
+    if (path === '/topics' && params.has('page')) {
+      const result = await listPage(s, params, 'SELECT * FROM topics ORDER BY updated DESC,id');
+      return reply({ ...result, rows: result.rows.map(row => withJson(row, { content: {} })) });
     }
     if (path === '/reports') return reply(await s.all(`SELECT period,window_start,window_end,generated,delivery,digest FROM reports ORDER BY period DESC LIMIT 48`));
     if (path === '/report') {
