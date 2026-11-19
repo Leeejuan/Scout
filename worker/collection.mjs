@@ -61,12 +61,18 @@ export async function planSearch(s, { id, mode, lower, upper, tier }, now) {
   }
   await s.batch([
     s.stmt('INSERT OR IGNORE INTO searches VALUES (?,?,?,?,?,?)', id, mode, now.toISOString(), lower, upper, JSON.stringify(issns)),
+    ...(mode === 'backfill' && tier === 'expanded' ? [s.stmt(`INSERT OR IGNORE INTO search_slices(
+      search_id,issn,lower_date,upper_date,cursor,pages,returned,omitted,total_expected,omissions,done)
+      SELECT ?,x.issn,x.lower_date,x.upper_date,x.cursor,x.pages,x.returned,x.omitted,x.total_expected,x.omissions,x.done
+      FROM search_slices x JOIN searches r ON r.id=x.search_id JOIN journals j ON j.issn=x.issn
+      WHERE r.mode='backfill' AND r.id LIKE 'backfill:pilot:%' AND r.lower_date=? AND r.upper_date=?
+      AND j.tier='pilot' AND x.done=1 AND x.error IS NULL`, id, lower, upper)] : []),
     s.stmt(`INSERT OR IGNORE INTO search_slices(search_id,issn,lower_date,upper_date)
       SELECT ?, j.value,json_extract(d.value,'$.start'),json_extract(d.value,'$.end')
       FROM json_each(?) j CROSS JOIN json_each(?) d`, id, JSON.stringify(issns), JSON.stringify(slices)),
     s.stmt(`INSERT OR IGNORE INTO jobs(id,kind,payload,priority,due)
       SELECT 'discover:'||search_id||':'||issn||':'||lower_date,'discover',json_object(
-        'id',search_id,'issn',issn,'lower',lower_date),?,? FROM search_slices WHERE search_id=?`,
+        'id',search_id,'issn',issn,'lower',lower_date),?,? FROM search_slices WHERE search_id=? AND done=0`,
       mode === 'update' ? 20 : 70, now.valueOf(), id)
   ]);
 }

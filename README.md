@@ -44,7 +44,7 @@ SCOUT_PROFILE=true npm run test:live
 
 2026-11-18 核验的官方免费额度为 Workers AI 每账户每日 **10,000 Neurons**，00:00 UTC 重置。默认给 Compass 留 **1,000**，账户缓冲 **3,000**，Scout 最高 **6,000**。在实际部署当天，查看 Cloudflare **Workers AI → Usage** 的当日和近几日数据、Compass 的峰值及其他项目占用。设定 Scout 限额时使用 `max(0, min(6000, 当日官方额度 − 其他项目预算 − 3000))`，其他项目预算包括 Compass 至少 1,000。Scout 只知道自己的 D1 台账，账户余额需在账户仪表板核对。 [Workers AI 定价与用量](https://developers.cloudflare.com/workers-ai/platform/pricing/)
 
-固定模型为 `@cf/meta/llama-3.1-8b-instruct-fp8-fast`。官方费率为每百万输入 token 4,119 Neurons、每百万输出 token 34,868 Neurons。Scout 将指令和输入 JSON 合计限制在 11,488 UTF-8 字节，预留 512 字节给消息封装，并限制最多 1,300 个输出 token。以 12,000 输入 token 及 1,300 输出 token 保守估算约 94.76 Neurons，调用前原子预留 300。每 UTC 日最多 20 次，失败和重试均计入。额度不足的任务顺延，检索和题录入库可继续。 [模型费率](https://developers.cloudflare.com/workers-ai/platform/pricing/)
+固定模型为 `@cf/google/gemma-4-26b-a4b-it`。官方费率为每百万输入 token 9,091 Neurons、每百万输出 token 27,273 Neurons。Scout 将指令和输入 JSON 合计限制在 11,488 UTF-8 字节，预留 512 字节给消息封装，并限制最多 1,300 个输出 token。以 12,000 输入 token 及 1,300 输出 token 保守估算约 144.5 Neurons，调用前原子预留 300。每 UTC 日最多 20 次，失败和重试均计入。额度不足的任务顺延，检索和题录入库可继续。 [模型费率](https://developers.cloudflare.com/workers-ai/platform/pricing/)
 
 Workers Free 每次定时运行的 CPU 上限为 10 ms，外部子请求上限为 50，D1 单次调用也受查询上限约束。每账户最多 5 条 Cron。确认 Compass 和其他 Worker 已用的条数，为 Scout 留一条。D1 免费账户每日额度为 500 万行读、10 万行写，账户总存储 5 GB。 [Worker 限额](https://developers.cloudflare.com/workers/platform/limits/) · [D1 限额](https://developers.cloudflare.com/d1/platform/limits/) · [D1 用量](https://developers.cloudflare.com/d1/platform/pricing/)
 
@@ -60,9 +60,9 @@ npx wrangler secret put SCOUT_API_TOKEN --env staging
 npx wrangler secret put OPENALEX_API_KEY --env staging
 ```
 
-测试环境无 Cron，AI 额度为 0，飞书自动推送关闭。测量用的部署可临时设置测试 Worker 的 `WORKER_TICK_ENABLED=true`，用测试 API token 触发 `POST /__tick`。以真实大小的更新页、长正文、简报和 Zotero 列表分别跑样本，查看 **Workers → Observability** 的 CPU、日志指标和 D1 的 Row Metrics。任务页展示 D1 返回的阶段行数及请求计数，日志 `scout_tick` 含额外的维护语句和总耗时。CPU 接近 10 ms 或超限时，先降低 `CROSSREF_PAGE_ROWS`（1–6）或停用相应正文来源，再启用生产。 [Cloudflare Metrics](https://developers.cloudflare.com/workers/observability/metrics-and-analytics/)
+测试环境无 Cron，默认 AI 额度为 0，飞书自动推送关闭。用测试 API token 触发 `POST /__tick` 可手动处理一项任务。以真实大小的更新页、长正文、简报和 Zotero 列表分别跑样本，查看 **Workers → Observability** 的 CPU、日志指标和 D1 的 Row Metrics。任务页展示 D1 返回的阶段行数及请求计数，日志 `scout_tick` 含额外的维护语句和总耗时。CPU 接近 10 ms 或超限时，先降低 `CROSSREF_PAGE_ROWS`（1–6）或停用相应正文来源，再启用生产。 [Cloudflare Metrics](https://developers.cloudflare.com/workers/observability/metrics-and-analytics/)
 
-Zotero 用专用测试库（或空白收藏夹及测试 API key），同一 DOI 连续写入两次并检查库内条目和子笔记数量。飞书使用下方的独立测试入口验证送达和按钮跳转。为验证真实的 AI 调用，把测试额度临时设为 300–600，借用额度前查账户余量。真实定时触发需生产启用后通过 Cron Events 核验。
+Zotero 用专用测试库（或空白收藏夹及测试 API key），同一 DOI 连续写入两次并检查库内条目和子笔记数量。飞书使用下方的独立测试入口验证送达和按钮跳转。完成账户余量核对后，可用 Wrangler 的 `--var SCOUT_AI_DAILY_NEURONS:600` 为一两次真实 AI 调用配置试运行额度。曾用 2,400 Neurons 上限验收一篇正文的部分自动提取及人工出处核对。真实定时触发需生产启用后通过 Cron Events 核验。
 
 #### 手动发送一张飞书测试卡片
 
@@ -135,9 +135,10 @@ npx wrangler secret put CROSSREF_MAILTO
 ### 5. 试运行和启用
 
 1. 在“任务与覆盖”用一个 DOI 试验，完成单篇筛查后打开详情和导出。初始清单两本期刊，确认流程后启动回填。
+   测试环境开启手动入口后，可用带 Worker Bearer token 的 `POST /__tick?scope=discover` 仅处理检索分片，`scope=collect` 处理采集、补全和正文获取，或以 `scope=analyze&doi=…` 处理指定 DOI 的正文分析。每次仍只领取一项任务，指定范围时不安排定时简报。
 2. 将 `SCHEDULE_ENABLED` 改为 `true`，部署后核验下一次 1 日或 16 日的运行。唯一 Cron 为 `*/10 * * * *`，每次最多领取一个任务。马来西亚时间 08:00 起安排该期更新，正常在更新核验完成后生成，11:00 起允许按当时的数据生成并注明尚未完成的任务。
 3. 飞书卡片验收通过后，在生产开启 `FEISHU_ENABLED`。只有具备新增正文发现或选题变化的简报才推送。发送超时、服务端错误或中断后先在群内核对，再从简报页确认已收到或确认未收到后重试。切换渠道时保留历史 Telegram 发送记录，历史待发送队列停止。
-4. 试运行稳定后，将 `JOURNAL_TIER` 设为 `expanded`，部署并启动扩展回填。期刊政策和期刊研究领域可在网页中核对。
+4. 试运行验收后，将 `JOURNAL_TIER` 设为 `expanded`，部署并启动扩展回填。相同日期窗口中无错误的已完成试点分片可复用。期刊政策和期刊研究领域可在网页中核对。
 
 ## 证据和覆盖边界
 

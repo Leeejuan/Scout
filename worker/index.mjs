@@ -1,4 +1,4 @@
-import { Problem, service } from './core.mjs';
+import { normalizeDoi, Problem, service } from './core.mjs';
 import { reply, route } from './api.mjs';
 import { tick } from './jobs.mjs';
 
@@ -13,9 +13,15 @@ export default {
   async fetch(request, env) {
     if (!authorized(request, env.SCOUT_API_TOKEN)) return reply({ error: '未授权' }, 401);
     try {
-      const path = new URL(request.url).pathname;
+      const url = new URL(request.url);
+      const { pathname: path, searchParams } = url;
       if (path === '/__tick' && request.method === 'POST' && env.WORKER_TICK_ENABLED === 'true') {
-        return reply(await tick(env));
+        const scope = searchParams.get('scope');
+        const doi = normalizeDoi(searchParams.get('doi'));
+        if ((scope && !['collect', 'discover', 'analyze'].includes(scope)) || (scope === 'analyze' && !doi)) {
+          throw new Problem(400, '请选择有效的手动任务范围；正文分析需要 DOI');
+        }
+        return reply(await tick(env, new Date(), { scope, doi }));
       }
       const s = service(env);
       const result = await route(s, request);

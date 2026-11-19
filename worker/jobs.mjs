@@ -15,7 +15,13 @@ const handlers = {
   zotero: (s, job, now) => zotero(s, job.payload, now)
 };
 
-export async function tick(env, now = new Date()) {
+const manualFilters = {
+  collect: "AND kind IN ('lookup','discover','enrich','fulltext')",
+  discover: "AND kind='discover'",
+  analyze: "AND kind='extract' AND json_extract(payload,'$.doi')=? AND json_type(payload,'$.ordinal')='integer'"
+};
+
+export async function tick(env, now = new Date(), { scope, doi } = {}) {
   const s = service(env);
   const started = Date.now();
   const token = crypto.randomUUID();
@@ -27,10 +33,12 @@ export async function tick(env, now = new Date()) {
   try {
     await s.run(`UPDATE reports SET delivery='uncertain',delivery_error='发送中断，等待人工核对',delivery_updated=?
       WHERE delivery='sending' AND delivery_updated<?`, now.toISOString(), new Date(started - 180000).toISOString());
-    await schedule(s, now);
+    if (!scope) await schedule(s, now);
+    const filter = Object.hasOwn(manualFilters, scope) ? manualFilters[scope] : '';
+    const filterArgs = scope === 'analyze' ? [doi] : [];
     const row = await s.first(`UPDATE jobs SET status='running',lease_token=?,lease_until=?,attempts=attempts+1
-      WHERE id=(SELECT id FROM jobs WHERE (status='queued' AND due<=?) OR (status='running' AND lease_until<=?)
-      ORDER BY priority,due,id LIMIT 1) RETURNING *`, token, started + 180000, now.valueOf(), started);
+      WHERE id=(SELECT id FROM jobs WHERE ((status='queued' AND due<=?) OR (status='running' AND lease_until<=?))
+      ${filter} ORDER BY priority,due,id LIMIT 1) RETURNING *`, token, started + 180000, now.valueOf(), started, ...filterArgs);
     if (!row) return { outcome: 'idle', ...s.usage };
     const job = { ...row, payload: parse(row.payload, {}) };
     let result;

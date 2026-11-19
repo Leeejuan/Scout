@@ -7,6 +7,7 @@ import { runtime } from '../scripts/test-runtime.mjs';
 import { day, myDate, normalizeDoi, rollingStart, shift } from '../worker/core.mjs';
 import { groundedClaims } from '../worker/extraction.mjs';
 import { parseJats, parseTei } from '../worker/documents.mjs';
+import { screenType } from '../worker/sources.mjs';
 import { scheduledPeriod, validateSynthesis } from '../worker/reports.mjs';
 import handler from '../api/scout.js';
 
@@ -62,6 +63,7 @@ test('DOI, date windows and conservative extraction', () => {
   assert.equal(normalizeDoi(' HTTPS://DX.DOI.ORG/10.55555%2FSCOUT-EXAMPLE '), doi);
   assert.equal(normalizeDoi('not a DOI'), null);
   assert.equal(rollingStart('2028-02-29'), '2025-02-28');
+  assert.equal(screenType('Full-length Research Article').status, 'included');
   assert.deepEqual(myDate(new Date('2026-12-15T23:59:59Z')), { date: '2026-12-16', hour: 7 });
   assert.equal(scheduledPeriod(new Date('2026-12-16T00:00:00Z')), '2026-12-16');
   const text = 'The study addresses user confidence.';
@@ -74,6 +76,27 @@ test('DOI, date windows and conservative extraction', () => {
   assert.equal(parseTei('<teiHeader><idno type="DOI">10.55555/another</idno></teiHeader><body><p>text.</p></body>', doi), null);
   assert.deepEqual(validateSynthesis({ state: [{ text: 'No source', ids: [1,1,99] }] },
     [{ doi }], new Set([doi])).state, []);
+});
+
+test('manual collection and DOI-scoped analysis claim only the selected jobs', async t => {
+  const r = await runtime({ bindings: { WORKER_TICK_ENABLED: 'true' } });
+  t.after(r.close);
+  const another = '10.55555/scout-another';
+  const due = Date.now();
+  const jobs = [
+    ['abstract', 'extract', { doi }, 1],
+    ['unrelated-body', 'extract', { doi: another, ordinal: 0, revision: 'first' }, 2],
+    ['selected-body', 'extract', { doi, ordinal: 0, revision: 'first' }, 3]
+  ];
+  await r.db.batch(jobs.map(([id, kind, payload, priority]) => r.db.prepare(
+    'INSERT INTO jobs(id,kind,payload,priority,due) VALUES(?,?,?,?,?)'
+  ).bind(id, kind, JSON.stringify(payload), priority, due)));
+  assert.equal((await r.request('/__tick?scope=collect', {}, 'wrong')).status, 401);
+  assert.equal((await r.request('/__tick?scope=analyze', {})).status, 400);
+  assert.equal((await r.request('/__tick?scope=collect', {}).then(res => res.json())).outcome, 'idle');
+  const run = await r.request('/__tick?scope=analyze&doi=' + encodeURIComponent(doi), {}).then(res => res.json());
+  assert.equal(run.outcome, 'done');
+  assert.equal((await r.db.prepare('SELECT job_id FROM job_events').first()).job_id, 'selected-body');
 });
 
 test('real D1 migrations, discovery, screening, OA HTML, export and Zotero idempotency', async t => {
@@ -167,7 +190,7 @@ test('persistent page progress records omissions and survives pagination', async
     }));
     return Response.json({ message: { items: records, 'total-results': 7 } });
   };
-  const r = await runtime({ http });
+  const r = await runtime({ http, bindings: { JOURNAL_TIER: 'expanded' } });
   t.after(r.close);
   const planned = await r.request('/backfill', { tier: 'pilot' }).then(res => res.json());
   const other = await r.request('/backfill', { tier: 'pilot' }).then(res => res.json());
@@ -180,6 +203,10 @@ test('persistent page progress records omissions and survives pagination', async
   const rows = await r.request('/search?id=' + encodeURIComponent(planned.id)).then(res => res.json());
   assert.ok(rows.some(row => row.done === 1 && row.returned === 7));
   assert.equal((await r.db.prepare("SELECT count(*) AS n FROM papers WHERE status='excluded'").first()).n, 2);
+  const expanded = await r.request('/backfill', { tier: 'expanded' }).then(res => res.json());
+  const carried = await r.db.prepare('SELECT count(*) AS n FROM search_slices WHERE search_id=? AND done=1 AND returned=7').bind(expanded.id).first();
+  assert.equal(carried.n, 1);
+  assert.equal(await r.db.prepare('SELECT 1 FROM jobs WHERE id=?').bind(first.id.replace(planned.id, expanded.id)).first(), null);
 });
 
 test('UTC reservation includes failure, concurrency and smaller caps', async t => {

@@ -21,11 +21,11 @@ const ai = {
         }]
       }) };
     }
-    return { response: JSON.stringify({ claims: [
+    return { choices: [{ message: { content: JSON.stringify({ claims: [
       { field: 'findings', value: 'Users adjusted their privacy settings', quote: 'Users adjusted their privacy settings.' },
       { field: 'methods', value: 'regression', quote: 'The study addresses user confidence.' },
       { field: 'limitations', value: 'small sample', quote: 'The study addresses user confidence.' }
-    ] }) };
+    ] }) } }] };
   }
 };
 export default {

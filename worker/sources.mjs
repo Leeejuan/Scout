@@ -5,7 +5,7 @@ const excluded = /\b(?:editorial|book[ -]review|review essay|commentary|commenta
 export function screenType(label) {
   const text = plain(label).toLowerCase().replaceAll('-', ' ');
   if (excluded.test(text)) return { status: 'excluded', type: text };
-  if (/^(?:original(?: research)? articles?|research articles?|articles? of original research|original research|full length articles?|empirical articles?|registered reports?|replication notes?)$/.test(text)) return { status: 'included', type: text };
+  if (/^(?:original(?: research)? articles?|research articles?|articles? of original research|original research|full length (?:research )?articles?|empirical articles?|registered reports?|replication notes?)$/.test(text)) return { status: 'included', type: text };
   if (/^(?:systematic reviews?|meta[ -]?analys[ie]s|review articles?|scoping reviews?|theoretical articles?|conceptual articles?)$/.test(text)) return { status: 'included', type: text };
   return { status: 'pending', type: text || null };
 }
