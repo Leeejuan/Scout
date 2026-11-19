@@ -436,3 +436,36 @@ test('signed staging card is gated and links to an authenticated demo report wit
   assert.deepEqual((await r.request('/activity').then(res => res.json())).budget, []);
   assert.equal((await r.db.prepare('SELECT count(*) AS count FROM jobs').first()).count, 0);
 });
+
+test('research pages expose all domains, concrete evidence, citation drilldowns and paginated lists', async t => {
+  const r = await runtime({ bindings: { JOURNAL_TIER: 'expanded' } });
+  t.after(r.close);
+  const first = '10.55555/workspace-a';
+  const second = '10.55555/workspace-b';
+  const authorId = 'https://openalex.org/A123';
+  const date = day();
+  const write = r.db.prepare(`INSERT INTO papers(doi,issn,title,published,publisher_url,crossref_url,authors,status,tags,
+    refs,evidence_state,first_seen,last_verified) VALUES(?,?,?,?,?,?,?,'included',?,?,'fulltext',?,?)`);
+  await r.db.batch(Array.from({ length: 19 }, (_, index) =>
+    write.bind(index === 0 ? first : index === 1 ? second : '10.55555/paged-' + index, journal,
+      'Peer-reviewed example ' + index, date, publisher, publisher,
+      JSON.stringify([{ name: 'Ada Lee', id: authorId }]), JSON.stringify(['digital']),
+      JSON.stringify(index === 0 ? [second] : []), date, date)));
+  await r.db.prepare("INSERT INTO judgments VALUES(?, 'future','Examine online interaction over time','Researchers should examine online interaction over time.','Discussion',?,'fulltext','author',1)").bind(first, publisher).run();
+  const get = path => r.request(path).then(res => { assert.equal(res.status, 200); return res.json(); });
+  const overview = await get('/overview');
+  assert.deepEqual(overview.stats, { total: 19, extracted: 1, reviewed: 1 });
+  assert.equal(overview.journals, 23);
+  const coverage = await get('/research?tag=digital&page=2');
+  assert.equal(coverage.domains.length, 19);
+  assert.equal(coverage.domains.find(row => row.tag === 'risk').count, 0);
+  assert.equal(coverage.domains.find(row => row.tag === 'risk').sources.length, 1);
+  assert.equal(coverage.papers.rows.length, 3);
+  assert.equal(coverage.directions.rows[0].locator, 'Discussion');
+  assert.equal((await get('/author?author=' + encodeURIComponent(authorId) + '&page=2')).count, 19);
+  assert.equal((await get('/relations?doi=' + encodeURIComponent(second))).incoming.rows[0].doi, first);
+  assert.equal((await get('/relations?doi=' + encodeURIComponent(first))).outgoing.rows[0].doi, second);
+  assert.equal((await get('/library?tag=digital&month=' + date.slice(0,7) + '&page=2')).rows.length, 1);
+  assert.deepEqual(await get('/reports?page=2'), { rows: [], page: 2, more: false });
+  assert.deepEqual(await get('/topics?page=2'), { rows: [], page: 2, more: false });
+});

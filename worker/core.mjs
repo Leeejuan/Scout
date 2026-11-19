@@ -10,7 +10,8 @@ export const TAGS = {
   mass: '大众传播', organizations: '组织传播', 'media-management': '媒体管理',
   global: '全球／跨文化传播', digital: '数字媒体', political: '战略／政治传播',
   'strategic-pr': '公共关系', 'health-risk': '健康／环境／风险传播', journalism: '新闻学',
-  marketing: '市场传播、广告与品牌传播'
+  marketing: '市场传播、广告与品牌传播', strategy: '战略传播', intercultural: '跨文化传播',
+  health: '健康传播', environment: '环境传播', risk: '风险沟通'
 };
 
 const patterns = {
@@ -27,6 +28,11 @@ const patterns = {
   'strategic-pr': /public relations|crisis communication|stakeholder|公关|公共关系/i,
   'health-risk': /health communication|environmental|climate|risk communication|vaccine|pandemic|健康传播|风险传播/i,
   journalism: /journalism|newsroom|news media|news reporting|记者|新闻/i,
+  strategy: /strategic communication|communication strateg|战略传播/i,
+  intercultural: /intercultural|cross.cultural communication|跨文化传播|跨文化交际/i,
+  health: /health communication|health literacy|vaccine communication|健康传播/i,
+  environment: /environmental communication|climate communication|环境传播|气候传播/i,
+  risk: /risk communication|crisis communication|风险沟通|危机沟通/i,
   marketing: /marketing|advertising|brand|consumer engagement|市场传播|广告|品牌/i
 };
 
