@@ -4,7 +4,7 @@ import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { runtime, testToken } from '../scripts/test-runtime.mjs';
-import { day, myDate, normalizeDoi, rollingStart, shift } from '../worker/core.mjs';
+import { day, myDate, normalizeDoi, threeYearStart, shift } from '../worker/core.mjs';
 import { groundedClaims } from '../worker/extraction.mjs';
 import { parseJats, parseTei } from '../worker/documents.mjs';
 import { screenType } from '../worker/sources.mjs';
@@ -62,7 +62,9 @@ const jsonVersion = (data, version, extra) => Response.json(data, { headers: { '
 test('DOI, date windows and conservative extraction', () => {
   assert.equal(normalizeDoi(' HTTPS://DX.DOI.ORG/10.55555%2FSCOUT-EXAMPLE '), doi);
   assert.equal(normalizeDoi('not a DOI'), null);
-  assert.equal(rollingStart('2028-02-29'), '2025-02-28');
+  assert.equal(threeYearStart('2028-02-29'), '2026-01-01');
+  assert.equal(threeYearStart('2026-11-19'), '2024-01-01');
+  assert.equal(threeYearStart('2027-01-01'), '2025-01-01');
   assert.equal(screenType('Full-length Research Article').status, 'included');
   assert.deepEqual(myDate(new Date('2026-12-15T23:59:59Z')), { date: '2026-12-16', hour: 7 });
   assert.equal(scheduledPeriod(new Date('2026-12-16T00:00:00Z')), '2026-12-16');
@@ -500,4 +502,24 @@ test('signed staging card is gated and links to an authenticated demo report wit
   assert.deepEqual(await r.request('/reports').then(res => res.json()), []);
   assert.deepEqual((await r.request('/activity').then(res => res.json())).budget, []);
   assert.equal((await r.db.prepare('SELECT count(*) AS count FROM jobs').first()).count, 0);
+});
+
+test('calendar-year research filters include January of the third year and exclude the fourth year', async t => {
+  const r = await runtime();
+  t.after(r.close);
+  const year = Number(day().slice(0, 4));
+  const early = (year - 2) + '-01-01';
+  const previous = (year - 3) + '-12-31';
+  const write = r.db.prepare(`INSERT INTO papers(doi,issn,title,published,publisher_url,crossref_url,status,tags,evidence_state,first_seen,last_verified)
+    VALUES(?,?,?,?,?,?,'included','["digital"]','fulltext',?,?)`);
+  await r.db.batch([write.bind('10.55555/year-in',journal,'Early article',early,publisher,publisher,day(),day()),
+    write.bind('10.55555/year-out',journal,'Earlier article',previous,publisher,publisher,day(),day())]);
+  const read = url => r.request(url).then(response => { assert.equal(response.status,200); return response.json(); });
+  const overview = await read('/overview');
+  assert.equal(overview.lower,early);
+  assert.deepEqual(overview.months.map(row=>row.month),[early.slice(0,7)]);
+  assert.deepEqual((await read('/library?year=' + (year - 2))).rows.map(row=>row.doi),['10.55555/year-in']);
+  assert.equal((await read('/library?year=' + (year - 3))).rows.length,0);
+  const map = await read('/workspace?section=map');
+  assert.deepEqual(map.domainYears,[{key:'digital',year:String(year - 2),count:1}]);
 });

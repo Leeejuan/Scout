@@ -1,4 +1,4 @@
-import { day, enqueueStmt, FIELDS, httpsUrl, limitedText, normalizeDoi, parse, Problem, researchCodes, rollingStart, TAGS } from './core.mjs';
+import { day, enqueueStmt, FIELDS, httpsUrl, limitedText, normalizeDoi, parse, Problem, researchCodes, threeYearStart, TAGS } from './core.mjs';
 import { planSearch } from './collection.mjs';
 import { documentStatements, localText } from './documents.mjs';
 import { exportCitation } from './export.mjs';
@@ -35,7 +35,7 @@ function requireDoi(value) {
 
 async function overview(s, now) {
   const upper = day(now);
-  const lower = rollingStart(upper);
+  const lower = threeYearStart(upper);
   const [months, domains, journals] = await Promise.all([
     s.all(`SELECT substr(published,1,7) AS month,status,evidence_state,count(*) AS count
       FROM papers WHERE status IN ('included','pending') AND published BETWEEN ? AND ?
@@ -229,13 +229,16 @@ export async function route(s, request, now = new Date()) {
   }
   if (path === '/backfill') {
     const tier = data.tier === 'expanded' && s.env.JOURNAL_TIER === 'expanded' ? 'expanded' : 'pilot';
+    const date = day(now);
+    const lower = threeYearStart(date);
     const running = await s.first(`SELECT r.id FROM searches r JOIN search_slices x ON x.search_id=r.id
       JOIN jobs q ON q.id='discover:'||x.search_id||':'||x.issn||':'||x.lower_date
-      WHERE r.mode='backfill' AND q.status IN ('queued','running') AND json_array_length(r.journals)=
-      (SELECT count(*) FROM journals WHERE tier='pilot' OR ?='expanded') LIMIT 1`, tier);
-    const date = day(now);
-    const id = running?.id ?? 'backfill:' + tier + ':' + date;
-    if (!running) await planSearch(s, { id, mode: 'backfill', tier, lower: rollingStart(date), upper: date }, now);
+      WHERE r.mode='backfill' AND r.lower_date=? AND q.status IN ('queued','running') AND json_array_length(r.journals)=
+      (SELECT count(*) FROM journals WHERE tier='pilot' OR ?='expanded') LIMIT 1`, lower, tier);
+    const baseId = 'backfill:' + tier + ':' + date;
+    const exists = await s.first('SELECT lower_date FROM searches WHERE id=?', baseId);
+    const id = running?.id ?? (exists && exists.lower_date !== lower ? baseId + ':calendar' : baseId);
+    if (!running) await planSearch(s, { id, mode: 'backfill', tier, lower, upper: date }, now);
     return reply({ id, queued: true }, 202);
   }
   if (path === '/screen') return reply(await screen(s, data, now));

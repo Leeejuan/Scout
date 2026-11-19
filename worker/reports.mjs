@@ -1,4 +1,4 @@
-import { day, enqueueStmt, myDate, parse, periodWindow, rollingStart, shift, TAGS } from './core.mjs';
+import { day, enqueueStmt, myDate, parse, periodWindow, threeYearStart, shift, TAGS } from './core.mjs';
 import { planSearch } from './collection.mjs';
 import { completion } from './extraction.mjs';
 
@@ -14,7 +14,7 @@ export async function schedule(s, now) {
   if (await s.first('SELECT id FROM jobs WHERE id=?', key)) return;
   const window = periodWindow(period);
   const prior = await s.first('SELECT max(period) AS period FROM reports WHERE period<?', period);
-  const lower = prior?.period ? [shift(prior.period, -7), rollingStart(period)].sort().at(-1) : shift(window.start, -7);
+  const lower = prior?.period ? [shift(prior.period, -7), threeYearStart(period)].sort().at(-1) : shift(window.start, -7);
   const updateId = 'update:' + period;
   const tier = s.env.JOURNAL_TIER === 'expanded' ? 'expanded' : 'pilot';
   await planSearch(s, { id: updateId, mode: 'update', lower, upper: period, tier }, now);
@@ -109,7 +109,7 @@ export async function generateReport(s, { period, tier, updateId, deadline }, no
     updateId, updateId);
   if (active.count && now.valueOf() < deadline) return { retry: now.valueOf() + 1200000, detail: '等待本期文献核验' };
   const scope = await s.all("SELECT issn,name FROM journals WHERE tier='pilot' OR ?='expanded' ORDER BY name", tier);
-  const cutoff = rollingStart(period);
+  const cutoff = threeYearStart(period);
   const startTime = new Date(window.start + 'T00:00:00+08:00').toISOString();
   const counts = await s.all(`SELECT p.status,p.evidence_state,count(*) AS count FROM papers p JOIN journals j USING(issn)
     WHERE (j.tier='pilot' OR ?='expanded') AND p.published BETWEEN ? AND ? GROUP BY p.status,p.evidence_state`, tier, cutoff, period);

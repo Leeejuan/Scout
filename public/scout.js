@@ -1,3 +1,4 @@
+import { annualChart, calendarYears } from './research-charts.js';
 import { comparisonUrl, issueNames, scopeArgs, workspaceViews } from './workbench.js';
 
 const view = document.querySelector('#view');
@@ -217,11 +218,12 @@ async function overview() {
     months.push({ month, count: monthly.get(month) ?? 0, partial: month + '-01' < data.lower || lastDay > data.upper });
     cursor.setUTCMonth(cursor.getUTCMonth() + 1);
   }
+  const years = calendarYears(data.lower, data.upper);
   const domainMax = Math.max(1, ...data.domains.map(row => row.count));
   return [
     el('section', { class: 'overview-hero' },
       el('div', {}, el('h1', {}, '研究总览'), p('传播学文献的收录趋势、领域分布与证据覆盖。'),
-        p(data.lower + ' 至 ' + data.upper + ' · 当前数据库', 'subtle'),
+        p(years.join('、') + ' · 按发表年份收录 · 当前数据库', 'subtle'),
         el('div',{class:'actions'},link('浏览文献证据库', '/?view=library', 'button'),
           link('探索领域与议题', '/?view=map', 'button'))),
       el('img', { class: 'overview-mascot', src: '/scout-avatar.webp', alt: '', width: 180, height: 180 })),
@@ -231,6 +233,13 @@ async function overview() {
     ].map(([label, count], index) => link([el('span', {}, label), el('strong', {}, count.toLocaleString('zh-CN'))],
       [urlOf({view:'library'}),urlOf({view:'library',state:'fulltext'}),urlOf({view:'library',status:'pending'}),urlOf({view:'map'})][index],
       'metric metric-link'))),
+    el('section', { class: 'panel chart-panel annual-panel', 'aria-labelledby': 'annual-title' },
+      el('h2', { id: 'annual-title' }, '三年发表量与正文覆盖'),
+      el('div', { class: 'chart-legend' }, el('span', { class: 'legend-mint' }, '完整正文'),
+        el('span', { class: 'legend-indigo' }, '其余已收录记录')),
+      annualChart(years, data.months),
+      el('div', { class: 'actions annual-links' }, years.map(year => link('查看 ' + year + ' 年文献', urlOf({ view:'library', year }), 'button'))),
+      p('本年统计截至 ' + data.upper + '。点击色块或年份进入对应文献。', 'subtle')),
     el('div', { class: 'overview-grid' },
       el('section', { class: 'panel chart-panel', 'aria-labelledby': 'trend-title' },
         el('h2', { id: 'trend-title' }, '发表趋势'),
@@ -256,7 +265,7 @@ async function overview() {
 }
 
 async function library(params, canManage) {
-  const args = { ...scopeArgs(params), ...Object.fromEntries([...params].filter(([key]) => ['q','status','after'].includes(key))) };
+  const args = { ...scopeArgs(params), ...Object.fromEntries([...params].filter(([key]) => ['q','status','after','claim'].includes(key))) };
   const [data, journals] = await Promise.all([api('library', { args }),api('journals')]);
   const counts = Object.fromEntries(data.counts.filter(row => row.status === 'included').map(row => [row.evidence_state, row.count]));
   const pending = data.counts.filter(row => row.status === 'pending').reduce((sum, row) => sum + row.count, 0);
@@ -268,11 +277,14 @@ async function library(params, canManage) {
     select('议题', 'topic', { '': '全部议题', ...issueNames }, args.topic ?? ''),
     select('研究情境线索', 'region', { '': '全部地区', ...regions }, args.region ?? ''),
     select('期刊', 'issn', { '': '全部期刊', ...Object.fromEntries(journals.map(j=>[j.issn,j.name])) },args.issn ?? ''),
+    select('发表年份','year', { '': '全部年份', ...Object.fromEntries(calendarYears(data.lower,data.upper).map(year => [year,year])) },args.year ?? ''),
     field('发表月份','month',{type:'month',value:args.month}),
+    args.claim && el('input',{type:'hidden',name:'claim',value:args.claim}),
     select('证据状态', 'state', { '': '全部状态', ...levels }, args.state ?? ''),
     button('搜索', 'primary'));
   return [
-    description('文献证据库', '滚动三年 · ' + data.lower + ' 至 ' + data.upper),
+    description('文献证据库', calendarYears(data.lower,data.upper).join('、') + ' · 按发表年份收录'),
+    args.claim && p(args.claim === 'future' ? '当前筛选 · 有正文出处的作者建议' : '当前筛选 · 有正文出处的研究发现', 'subtle'),
     el('div', { class: 'metrics' }, [ ...Object.entries(levels).map(([key, label]) => [label, counts[key] ?? 0]), ['待筛查', pending] ]
       .map(([label, count]) => el('div', { class: 'metric' }, el('strong', {}, count), el('span', {}, label)))),
     filters,

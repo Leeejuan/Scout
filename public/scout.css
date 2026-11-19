@@ -175,3 +175,23 @@ nav a[data-page="reports"] { margin-top: 1rem; border-top: 1px solid var(--line)
   .work-grid { grid-template-columns: 1fr; }
   .work-filters label { min-width: 0; }
 }
+
+.annual-chart { width: 100%; height: auto; display: block; margin: .65rem 0; }
+.annual-chart text { fill: var(--ink); font: 18px system-ui,sans-serif; }
+.chart-track { fill: #efedfd; }
+.chart-indigo { fill: #7064cf; }
+.chart-mint { fill: #359879; }
+.annual-chart a:hover rect, .annual-chart a:focus-visible rect { stroke: #20204c; stroke-width: 2; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: .85rem; color: var(--muted); font-size: .85rem; }
+.chart-legend span::before { content: ''; display: inline-block; width: .72rem; height: .72rem; margin-right: .4rem; border-radius: 3px; }
+.legend-mint::before { background: #359879; }
+.legend-indigo::before { background: #7064cf; }
+.annual-links { margin: .35rem 0 .7rem; }
+.heat-cell { display: block; min-width: 2.35rem; padding: .4rem .55rem; border-radius: 6px; text-align: center; color: #25244c; font-variant-numeric: tabular-nums; }
+.heat-0 { background: #f1eff9; }
+.heat-1 { background: #e2defb; }
+.heat-2 { background: #c5baf5; }
+.heat-3 { background: #8a7bdc; }
+.heat-4 { background: #5142ae; color: white; }
+.coverage-chart { list-style: none; display: grid; gap: .85rem; padding: 0; margin: 0; }
+.coverage-chart progress { display: block; width: 100%; height: .55rem; margin-top: .2rem; accent-color: #359879; }

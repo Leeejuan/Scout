@@ -1,10 +1,11 @@
+import { calendarYears, coverageChart } from './research-charts.js';
 export const issueNames = {
   'mediated-ai': '生成式 AI 与媒介互动', 'platform-algorithms': '平台算法与推荐',
   'information-integrity': '误导信息与事实核查', privacy: '数字隐私与披露',
   participation: '政治效能与参与', wellbeing: '媒介使用与心理健康',
   representation: '媒介表征与文化认同', 'brand-trust': '广告、品牌与信任'
 };
-export const filterKeys = ['tag','topic','region','state','month','issn'];
+export const filterKeys = ['tag','topic','region','state','year','month','issn'];
 export const scopeArgs = params => Object.fromEntries(filterKeys.flatMap(key => params.get(key) ? [[key, params.get(key)]] : []));
 export const comparisonUrl = (dois, args = {}) => '/?' + new URLSearchParams([
   ['view','compare'], ...Object.entries(args), ...dois.map(doi => ['doi',doi])
@@ -25,6 +26,7 @@ export function workspaceViews(ui) {
       select('地区线索','region', { '': '全部地区', ...regions },args.region ?? ''),
       select('证据状态','state', { '': '全部状态', ...levels },args.state ?? ''),
       select('期刊','issn', { '': '全部期刊', ...Object.fromEntries(journals.map(j => [j.issn, j.name])) }, args.issn ?? ''),
+      field('发表年份','year', { type:'number', min:'1900', max:'2100', value:args.year }),
       field('发表月份','month', { type:'month', value:args.month }), extra,
       el('div', { class: 'actions' }, button('应用筛选', 'primary'), link('清除',urlOf({ view:page }), 'button')));
   }
@@ -55,9 +57,22 @@ export function workspaceViews(ui) {
   async function map(params) {
     const args = scopeArgs(params);
     const data = await api('workspace', { args: { section:'map', ...args } });
+    const years = calendarYears(data.lower, data.upper);
+    const byYear = new Map((data.domainYears ?? []).map(row => [row.key + ':' + row.year,row.count]));
+    const peak = Math.max(1, ...byYear.values());
+    const heatmap = table(['研究领域', ...years], Object.entries(tags).map(([key,label]) => [
+      link(label,urlOf({ view:'map', ...args, tag:key })),
+      ...years.map(year => {
+        const count = byYear.get(key + ':' + year) ?? 0;
+        const intensity = Math.ceil(4 * count / peak);
+        return el('a', { href: libraryLink({ ...args, tag:key, year }), class:'heat-cell heat-' + intensity,
+          'aria-label': label + ' · ' + year + ' · ' + number(count) + ' 篇' }, number(count));
+      })
+    ]));
     return [description('领域与议题地图','按论文标签和题录关键词浏览证据。'),
       filters('map',args,data.journals), context(data),
       !data.counts.included && panel(p('此范围暂无已收录论文。可放宽筛选条件查看其他证据。','subtle')),
+      section('领域 × 发表年份',panel(p('颜色越深代表当前范围内的收录数量越高。每个格子可打开对应文献。','subtle'),heatmap)),
       el('div', { class:'work-grid' },
         section('传播学领域', panel(bars(tags,data.domains,'tag',args))),
         section('横跨领域的议题', panel(p('议题按题名和摘要关键词匹配，可同时命中多个议题。','subtle'), bars(issueNames,data.topics,'topic',args))))];
@@ -108,6 +123,7 @@ export function workspaceViews(ui) {
     const saved = personal.filter(row=>row.kind==='judgment' && ['consensus','disagreement'].includes(row.content.classification));
     return [description('共识与分歧','以原文证据为起点，逐篇核对结论的适用条件。'),
       filters('synthesis',args,data.journals),context(data),
+      section('当前范围的证据覆盖',panel(coverageChart(data.counts,args,el))),
       panel(el('h2',{},data.counts.findings<2 ? '证据不足' : '可进入比较'),
         p(data.counts.findings<2 ? '当前范围内至少需要两篇有正文发现的论文，才能保存为共识或分歧。' :
           '先对照概念、测量、样本、场景和设计。共享标签只用于寻找候选。','subtle')),
@@ -156,15 +172,10 @@ export function workspaceViews(ui) {
     const [data,personal] = await Promise.all([api('workspace',{args:{section:'gaps',...args}}),api('personal')]);
     const directions=data.claims.filter(row=>row.field==='future');
     const { counts }=data;
-    const missing = [
-      ['待补完整正文',counts.included-counts.fulltext],
-      ['暂无正文发现',counts.included-counts.findings],
-      ['暂无可定位的作者建议',counts.included-counts.directions]
-    ];
     return [description('研究缺口','查找作者提出的后续方向，并记录你要验证的问题。'),
       filters('gaps',args,data.journals),context(data),
       section('证据库覆盖',panel(p('以下数字用于安排阅读与核验，范围限于当前筛选的已收录论文。','subtle'),
-        table(['当前可补充的材料','篇数'],missing.map(([label,n])=>[label,number(n)])))),
+        coverageChart(counts,args,el))),
       section('作者提出的未来研究方向', p(counts.directions + ' 篇有出处的论文 · 展示最多 ' + data.limit + ' 篇','subtle'),
         directions.length ? directions.map(row=>panel(
         el('h3',{},link(titleOf(data.papers,row.doi),urlOf({doi:row.doi}))),evidence(row,true),

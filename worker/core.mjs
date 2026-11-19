@@ -51,10 +51,8 @@ export function normalizeDoi(value) {
 export const doiUrl = doi => 'https://doi.org/' + doi.split('/').map(encodeURIComponent).join('/');
 export const day = (date = new Date()) => date.toISOString().slice(0, 10);
 export const shift = (date, days) => day(new Date(Date.parse(date) + days * 86400000));
-export function rollingStart(date) {
-  const [year, month, number] = date.split('-').map(Number);
-  const lastDay = new Date(Date.UTC(year - 3, month, 0)).getUTCDate();
-  return day(new Date(Date.UTC(year - 3, month - 1, Math.min(number, lastDay))));
+export function threeYearStart(date) {
+  return String(Number(date.slice(0, 4)) - 2) + '-01-01';
 }
 
 export function myDate(now) {

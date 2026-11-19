@@ -1,4 +1,4 @@
-import { day, enqueueStmt, parse, Problem, rollingStart, shift } from './core.mjs';
+import { day, enqueueStmt, parse, Problem, threeYearStart, shift } from './core.mjs';
 import { crossrefUrl, discoveryPageSize, fetchAlex, fromCrossref, fromOpenAlex, makeDiscoveryUrl } from './sources.mjs';
 import { acquire, documentStatements } from './documents.mjs';
 
@@ -44,7 +44,7 @@ export async function lookup(s, doi, now) {
   const journal = (await s.all('SELECT * FROM journals')).find(entry => work.ISSN?.includes(entry.issn));
   if (!journal) throw new Problem(422, 'DOI 不在已核验期刊清单内');
   const stamp = now.toISOString();
-  const paper = fromCrossref(work, journal, rollingStart(day(now)), day(now));
+  const paper = fromCrossref(work, journal, threeYearStart(day(now)), day(now));
   if (paper.omitted || paper.doi !== doi) throw new Problem(422, 'DOI 无法纳入滚动检索范围');
   await s.batch(savePaper(s, paper, stamp, day(now)));
   return { detail: paper.status === 'excluded' ? 'Crossref 类型已排除' : 'Crossref 题录已保存' };
@@ -83,7 +83,7 @@ export async function discover(s, { id, issn, lower }, now) {
     WHERE x.search_id=? AND x.issn=? AND x.lower_date=?`, id, issn, lower);
   if (!row || row.done) return { detail: '检索分片已完成' };
   const searchDay = day(new Date(row.started));
-  const rolling = rollingStart(searchDay);
+  const rolling = threeYearStart(searchDay);
   let result;
   try {
     result = (await s.json(makeDiscoveryUrl(s, row, { mode: row.mode, rolling }), 'Crossref')).message;

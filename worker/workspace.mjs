@@ -1,4 +1,4 @@
-import { day, normalizeDoi, parse, Problem, rollingStart, TAGS } from './core.mjs';
+import { day, normalizeDoi, parse, Problem, threeYearStart, TAGS } from './core.mjs';
 import { hash, relationships, topicFields } from './reports.mjs';
 
 export const ISSUES = {
@@ -16,7 +16,7 @@ const issueClause = key => ISSUES[key].map(() => "instr(lower(p.title||' '||coal
 
 export function paperScope(params, now) {
   const upper = day(now);
-  const lower = rollingStart(upper);
+  const lower = threeYearStart(upper);
   const terms = ['p.published BETWEEN ? AND ?'];
   const args = [lower, upper];
   const tag = params.get('tag');
@@ -24,6 +24,8 @@ export function paperScope(params, now) {
   const region = params.get('region');
   const state = params.get('state');
   const month = params.get('month');
+  const year = params.get('year');
+  const claim = params.get('claim');
   const issn = params.get('issn');
   if (Object.hasOwn(TAGS, tag)) {
     terms.push('EXISTS(SELECT 1 FROM json_each(p.tags) WHERE value=?)');
@@ -40,6 +42,12 @@ export function paperScope(params, now) {
   if (['record','abstract','fulltext'].includes(state)) {
     terms.push('p.evidence_state=?');
     args.push(state);
+  }
+  if (claim === 'findings') terms.push(reportableFindings);
+  if (claim === 'future') terms.push(reportableDirections);
+  if (/^\d{4}$/.test(year ?? '')) {
+    terms.push('p.published BETWEEN ? AND ?');
+    args.push(year + '-01-01', year + '-12-31');
   }
   if (/^\d{4}-(?:0[1-9]|1[0-2])$/.test(month ?? '')) {
     terms.push('substr(p.published,1,7)=?');
@@ -80,13 +88,15 @@ export async function workspace(s, params, now) {
   const base = { lower, upper, counts, journals };
   if (section === 'map') {
     const topics = Object.keys(ISSUES);
-    const [domains, hits] = await Promise.all([
+    const [domains, hits, domainYears] = await Promise.all([
       s.all(`SELECT t.value AS key,count(*) AS count,sum(p.evidence_state='fulltext') AS fulltext
         FROM papers p JOIN json_each(p.tags) t WHERE ${scope} GROUP BY key`, ...args),
       s.first(`SELECT ${topics.map((key, i) => `count(CASE WHEN (${issueClause(key)}) THEN 1 END) AS topic${i}`).join(',')}
-        FROM papers p WHERE ${scope}`, ...topics.flatMap(key => ISSUES[key]), ...args)
+        FROM papers p WHERE ${scope}`, ...topics.flatMap(key => ISSUES[key]), ...args),
+      s.all(`SELECT t.value AS key,substr(p.published,1,4) AS year,count(DISTINCT p.doi) AS count
+        FROM papers p JOIN json_each(p.tags) t WHERE ${scope} GROUP BY key,year`, ...args)
     ]);
-    return { ...base, domains: domains.filter(row => Object.hasOwn(TAGS, row.key)),
+    return { ...base, domainYears, domains: domains.filter(row => Object.hasOwn(TAGS, row.key)),
       topics: topics.map((key, i) => ({ key, count: hits['topic' + i] })) };
   }
   if (section === 'people') {
