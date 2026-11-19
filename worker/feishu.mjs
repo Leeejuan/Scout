@@ -28,6 +28,7 @@ const line = (value, limit) => typeof value === 'string' ? value.replace(/\s+/g,
 function digestCard(web, period, content, test) {
   const link = new URL('/', web);
   link.searchParams.set('report', period);
+  const workspace = new URL('/?view=overview', web);
   const findings = (content.findings ?? []).slice(0, 3).map(row =>
     [line(row.title, 160), line(row.value, 170), row.doi && 'DOI ' + line(row.doi, 240)].filter(Boolean).join('\n'));
   const topics = (content.synthesis?.topics ?? []).slice(0, 2).map(row =>
@@ -44,7 +45,9 @@ function digestCard(web, period, content, test) {
       elements: [
         ...highlights.map(content => ({ tag: 'div', text: plainText(content) })),
         { tag: 'button', type: 'primary', text: plainText('查看完整简报'),
-          behaviors: [{ type: 'open_url', default_url: link.href }] }
+          behaviors: [{ type: 'open_url', default_url: link.href }] },
+        ...(!test ? [{ tag: 'button', text: plainText('打开研究工作台'),
+          behaviors: [{ tag: 'open_url', default_url: workspace.href }] }] : [])
       ]
     }
   };

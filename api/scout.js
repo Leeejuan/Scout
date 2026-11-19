@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-const readActions = new Set(['overview','library','paper','export','reports','report','topics','journals']);
+const readActions = new Set(['overview','library','paper','export','reports','report','topics','journals','workspace','compare']);
 const managementReads = new Set(['activity','search']);
 const postActions = new Set(['lookup','backfill','screen','document','judgment','topic','topic-state','zotero','retry','feishu-reconcile']);
 const cookieName = 'scout_session';
@@ -90,8 +90,18 @@ export default async function handler(req, res) {
   }
   const reading = req.method === 'GET' && readActions.has(action);
   const managing = req.method === 'GET' && managementReads.has(action) || isPost && postActions.has(action);
-  if (!reading && !managing) return json(res, 404, { error: '未找到请求' });
+  const personal = req.method === 'GET' && action === 'personal' || isPost && action === 'workspace-entry';
+  if (!reading && !managing && !personal) return json(res, 404, { error: '未找到请求' });
   if (!signedIn && managing) return json(res, 401, { error: '请登录 Scout 管理入口' });
+  let personalOwner;
+  if (personal) {
+    const name = local ? 'scout_workspace' : '__Host-scout_workspace';
+    const existing = req.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith(name + '='))?.slice(name.length + 1);
+    if (isPost && !/^[A-Za-z0-9_-]{43}$/.test(existing ?? '')) return json(res, 409, { error: '请刷新工作台后再保存个人条目' });
+    const key = /^[A-Za-z0-9_-]{43}$/.test(existing ?? '') ? existing : randomBytes(32).toString('base64url');
+    res.setHeader('set-cookie', name + '=' + key + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=34560000' + (local ? '' : '; Secure'));
+    personalOwner = createHash('sha256').update(key).digest('hex');
+  }
 
   try {
     const target = new URL('/' + action, env.SCOUT_WORKER_URL);
@@ -101,11 +111,13 @@ export default async function handler(req, res) {
     }
     for (const [key, value] of url.searchParams) if (key !== 'action') target.searchParams.append(key, value);
     const response = await fetch(target, {
-      method: req.method, headers: { authorization: 'Bearer ' + env.SCOUT_API_TOKEN, 'content-type': 'application/json' },
+      method: req.method, headers: { authorization: 'Bearer ' + env.SCOUT_API_TOKEN, 'content-type': 'application/json',
+        ...(personalOwner ? { 'x-scout-personal': personalOwner } : {}) },
       ...(isPost ? { body: JSON.stringify(body) } : {}), redirect: 'error', signal: AbortSignal.timeout(20000)
     });
-    if (!signedIn && response.ok && (action === 'paper' || action === 'report')) {
+    if (!signedIn && response.ok && (action === 'paper' || action === 'report' || action === 'topics')) {
       const data = await response.json();
+      if (action === 'topics') return json(res, response.status, data.filter(row => row.status === 'candidate'));
       if (action === 'paper') delete data.zotero;
       if (action === 'report') delete data.telegram_id;
       return json(res, response.status, data);

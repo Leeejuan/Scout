@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { runtime } from '../scripts/test-runtime.mjs';
+import { runtime, testToken } from '../scripts/test-runtime.mjs';
 import { day, myDate, normalizeDoi, rollingStart, shift } from '../worker/core.mjs';
 import { groundedClaims } from '../worker/extraction.mjs';
 import { parseJats, parseTei } from '../worker/documents.mjs';
@@ -376,6 +376,71 @@ test('local text retains PDF locators and accepts only attributable manual evide
   assert.deepEqual(paper.judgments.map(j => [j.locator, j.doi, j.reviewed]), [['PDF 页 2 · Results', doi, 1]]);
   const matches = await r.request('/library?q=reported+privacy+settings').then(res => res.json());
   assert.equal(matches.rows[0].doi, doi);
+});
+
+test('workbench reads live evidence without a report and isolates saved personal work', async t => {
+  const r = await runtime();
+  t.after(r.close);
+  const second = '10.55555/scout-workbench-sample';
+  const stamp = new Date().toISOString();
+  await r.db.batch([doi, second].map(id => r.db.prepare(`INSERT INTO papers
+    (doi,issn,title,published,publisher_url,crossref_url,status,first_seen,last_verified,tags,regions,authors)
+    VALUES(?,?,?,?,?,?,'included',?,?,?,?,?)`).bind(id,journal,'Study of privacy on social media',publication,publisher,
+      'https://api.crossref.org',stamp,stamp,'["digital"]','["MY","SEA"]','[{"name":"Scout Author","id":"https://openalex.org/A123"}]')));
+  const quote = 'The researchers found higher willingness to change privacy settings.';
+  const future = 'Future research should compare settings across a wider sample.';
+  await r.request('/document', { doi, source: publisher, coverage:'body',
+    text:'# Introduction\n'+'Context for a privacy study. '.repeat(60)+'\f# Results\n'+quote+'\n# Discussion\n'+future });
+  for (const [field, sourceQuote] of [['findings',quote],['future',future]]) {
+    const saved = await r.request('/judgment',{doi,field,value:sourceQuote,quote:sourceQuote,level:'fulltext'});
+    assert.equal(saved.status,200);
+  }
+  const set = { SCOUT_LOCAL_DEV:'true',SCOUT_WORKER_URL:(await r.mf.ready).href,SCOUT_API_TOKEN:testToken };
+  const previous = Object.fromEntries(Object.keys(set).map(key=>[key,process.env[key]]));
+  Object.assign(process.env,set);
+  t.after(()=>{
+    for(const [key,value] of Object.entries(previous)) {
+      if(value===undefined) delete process.env[key]; else process.env[key]=value;
+    }
+  });
+  const server=createServer(handler).listen(0,'127.0.0.1');
+  t.after(()=>server.close());
+  await once(server,'listening');
+  const origin='http://127.0.0.1:'+server.address().port;
+  const send=(action,opts)=>fetch(origin+'/api/scout?action='+action,opts);
+  assert.deepEqual(await send('reports').then(res=>res.json()),[]);
+  const map=await send('workspace&section=map&tag=digital&region=MY').then(res=>res.json());
+  assert.equal(map.counts.included,2);
+  assert.equal(map.counts.fulltext,1);
+  assert.equal(map.topics.find(row=>row.key==='privacy').count,2);
+  const list = await send('library&topic=privacy&month='+publication.slice(0,7)).then(res=>res.json());
+  assert.equal(list.rows.length,2);
+  const source=await send('workspace&section=evidence&topic=privacy').then(res=>res.json());
+  assert.equal(source.counts.findings,1);
+  assert.ok(source.claims.some(row=>row.field==='future'&&row.quote===future&&row.source===publisher));
+  const pair = 'compare&doi='+encodeURIComponent(second)+'&doi='+encodeURIComponent(doi);
+  const compare=await send(pair).then(res=>res.json());
+  assert.deepEqual(compare.papers.map(row=>row.doi),[second,doi]);
+  assert.equal(compare.claims.find(row=>row.field==='findings').locator,'PDF 页 2 · Results');
+  assert.equal((await send('workspace&section=people').then(res=>res.json())).papers.length,2);
+  const personal=await send('personal');
+  const cookie=personal.headers.get('set-cookie').split(';')[0];
+  assert.match(personal.headers.get('set-cookie'),/HttpOnly; SameSite=Strict/);
+  const note={kind:'judgment',text:'Compare the methods before forming a conclusion.',classification:'observation',dois:[doi,second]};
+  const save=(body,options={})=>send('workspace-entry',{method:'POST',headers:{
+    origin:options.origin??origin,'content-type':'application/json',cookie:options.cookie??cookie
+  },body:JSON.stringify(body)});
+  assert.equal((await save(note,{cookie:''})).status,409);
+  assert.equal((await save(note,{origin:'https://other.example'})).status,403);
+  assert.equal((await save({...note,classification:'consensus'})).status,422);
+  assert.equal((await save(note)).status,200);
+  const topic=Object.fromEntries(['title','question','contribution','type','primary','alternative','data','time','ethics'].map(key=>[key,'Example '+key]));
+  assert.equal((await save({...topic,kind:'topic',dois:[doi]})).status,200);
+  const entries=await send('personal',{headers:{cookie}}).then(res=>res.json());
+  assert.equal(entries.length,2);
+  assert.equal(entries.find(row=>row.kind==='judgment').content.evidence[0].quote,quote);
+  assert.deepEqual(await send('personal',{headers:{'x-scout-personal':'a'.repeat(64)}}).then(res=>res.json()),[]);
+  assert.deepEqual(await send('topics').then(res=>res.json()),[]);
 });
 
 test('Feishu confirms one delivery when repeated jobs compete', async t => {

@@ -5,6 +5,7 @@ import { exportCitation } from './export.mjs';
 import { hash, topicFields, topicSignature } from './reports.mjs';
 import { FEISHU_TEST_PERIOD, sendFeishuTest, testReport } from './feishu.mjs';
 import { screenType } from './sources.mjs';
+import { comparison, paperScope, personalEntries, savePersonalEntry, workspace } from './workspace.mjs';
 
 const headers = { 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' };
 export const reply = (data, status = 200) => Response.json(data, { status, headers });
@@ -51,30 +52,15 @@ async function library(s, params, now) {
   const limit = 18;
   const status = ['included','pending','excluded'].includes(params.get('status')) ? params.get('status') : 'included';
   const query = (params.get('q') ?? '').trim().slice(0, 180);
-  const tag = params.get('tag');
-  const region = params.get('region');
-  const state = params.get('state');
   const after = params.get('after') ?? '';
   const cursor = [after.slice(0, 10), after.slice(11)];
-  const date = day(now);
-  const filters = ['p.status=?', 'p.published BETWEEN ? AND ?'];
-  const args = [status, rollingStart(date), date];
+  const scope = paperScope(params, now);
+  const filters = ['p.status=?', scope.where];
+  const args = [status, ...scope.args];
   if (query) {
     filters.push(`(p.doi=? OR instr(lower(p.title),lower(?))>0 OR instr(lower(coalesce(p.abstract,'')),lower(?))>0 OR instr(lower(p.authors),lower(?))>0
       OR EXISTS(SELECT 1 FROM judgments e WHERE e.doi=p.doi AND (instr(lower(e.value),lower(?))>0 OR instr(lower(e.quote),lower(?))>0)))`);
     args.push(normalizeDoi(query) ?? query, query, query, query, query, query);
-  }
-  if (tag && Object.hasOwn(TAGS, tag)) {
-    filters.push('EXISTS(SELECT 1 FROM json_each(p.tags) WHERE value=?)');
-    args.push(tag);
-  }
-  if (['CN','MY','SEA'].includes(region)) {
-    filters.push('EXISTS(SELECT 1 FROM json_each(p.regions) WHERE value=?)');
-    args.push(region);
-  }
-  if (['record','abstract','fulltext'].includes(state)) {
-    filters.push('p.evidence_state=?');
-    args.push(state);
   }
   if (/^\d{4}-\d\d-\d\d$/.test(cursor[0]) && normalizeDoi(cursor[1])) {
     filters.push('(p.published<? OR p.published=? AND p.doi>?)');
@@ -91,9 +77,9 @@ async function library(s, params, now) {
     const unpacked = withJson(row, { authors: [], tags: [], regions: [], labels: [] });
     return { ...unpacked, codes: researchCodes(row.subtype, unpacked.labels) };
   });
-  const counts = await s.all(`SELECT status,evidence_state,count(*) AS count FROM papers
-    WHERE published BETWEEN ? AND ? GROUP BY status,evidence_state`, rollingStart(date), date);
-  return { rows, counts, lower: rollingStart(date), upper: date, next: more ? rows.at(-1).published + '|' + rows.at(-1).doi : null };
+  const counts = await s.all(`SELECT p.status,p.evidence_state,count(*) AS count FROM papers p
+    WHERE ${scope.where} GROUP BY p.status,p.evidence_state`, ...scope.args);
+  return { rows, counts, lower: scope.lower, upper: scope.upper, next: more ? rows.at(-1).published + '|' + rows.at(-1).doi : null };
 }
 
 async function screen(s, data, now) {
@@ -181,8 +167,15 @@ export async function route(s, request, now = new Date()) {
   const url = new URL(request.url);
   const path = url.pathname;
   const params = url.searchParams;
+  const personal = request.headers.get('x-scout-personal');
+  if (['/personal','/workspace-entry'].includes(path) && !/^[a-f\d]{64}$/.test(personal ?? '')) {
+    throw new Problem(401, '请从 Scout 工作台访问个人条目');
+  }
   if (request.method === 'GET') {
     if (path === '/overview') return reply(await overview(s, now));
+    if (path === '/workspace') return reply(await workspace(s, params, now));
+    if (path === '/compare') return reply(await comparison(s, params));
+    if (path === '/personal') return reply(await personalEntries(s, personal));
     if (path === '/library') return reply(await library(s, params, now));
     if (path === '/paper') return reply(await paperDetails(s, requireDoi(params.get('doi'))));
     if (path === '/export') {
@@ -222,6 +215,7 @@ export async function route(s, request, now = new Date()) {
   if (request.method !== 'POST') throw new Problem(405, '请求方法不支持');
   const data = parse(await limitedText(new Response(request.body), 310000), null);
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Problem(400, '需要有效 JSON 请求');
+  if (path === '/workspace-entry') return reply(await savePersonalEntry(s, personal, data, now));
   if (path === '/__feishu-test' && s.env.FEISHU_TEST_ENABLED === 'true') {
     return reply(await sendFeishuTest(s, data.webUrl));
   }

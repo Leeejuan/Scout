@@ -5,7 +5,9 @@ import handler from '../api/scout.js';
 const assets = Object.freeze({
   '/': ['index.html', 'text/html'],
   '/scout.js': ['scout.js', 'text/javascript'],
-  '/scout.css': ['scout.css', 'text/css']
+  '/workbench.js': ['workbench.js', 'text/javascript'],
+  '/scout.css': ['scout.css', 'text/css'],
+  '/scout-avatar.webp': ['scout-avatar.webp', 'image/webp']
 });
 const port = Number(process.env.SCOUT_LOCAL_PORT ?? 3000);
 export const localServer = createServer(async (req, res) => {
