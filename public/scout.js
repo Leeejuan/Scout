@@ -29,7 +29,6 @@ const jobs = { queued: '待处理', running: '处理中', done: '已完成', dea
 const topicStatuses = { candidate: 'Scout 候选', saved: '已收藏', archived: '已归档' };
 const zoteroStates = { queued: '已排队', synced: '条目及笔记已核对', item_saved: '条目已核对，暂无分析笔记', retry: '等待重试', failed: '写入失败' };
 let renderId = 0;
-let readWithoutLogin = false;
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -87,7 +86,7 @@ async function api(action, { args, body } = {}) {
   } : {});
   const data = await response.json();
   if (!response.ok) {
-    if (response.status === 401 && action !== 'login') showLogin();
+    if (response.status === 401 && action !== 'login' && (body || ['activity','search'].includes(action))) showLogin();
     throw new Error(data.error ?? 'Scout 请求失败');
   }
   return data;
@@ -136,11 +135,10 @@ function showLogin() {
   nav.hidden = manageLogin.hidden = logout.hidden = true;
   view.setAttribute('aria-busy', 'false');
   view.replaceChildren(el('div', { class: 'panel login' },
-    el('h1', {}, readWithoutLogin ? 'Scout 管理登录' : '登录 Scout'),
+    el('h1', {}, 'Scout 管理登录'),
     form(async data => { await api('login', { body: data }); await load(); },
       field('访问口令', 'password', { type: 'password', required: true, autocomplete: 'current-password', maxlength: 256 }),
-      el('div', { class: 'actions' }, button('登录', 'primary'),
-        readWithoutLogin && link('返回研究总览', '/?view=overview', 'button')))));
+      el('div', { class: 'actions' }, button('登录', 'primary'), link('返回研究总览', '/?view=overview', 'button')))));
 }
 
 function paperCard(item) {
@@ -482,10 +480,10 @@ async function load({ keepNotice = false } = {}) {
   try {
     const session = await api('session');
     if (id !== renderId) return;
-    readWithoutLogin = session.readWithoutLogin;
     const params = new URLSearchParams(location.search);
-    const page = params.has('doi') ? 'library' : params.has('report') ? 'reports' : params.get('view') ?? (params.size ? 'library' : 'overview');
-    if (!session.signedIn && (!readWithoutLogin || page === 'activity')) { showLogin(); return; }
+    const requestedPage = params.has('doi') ? 'library' : params.has('report') ? 'reports' : params.get('view') ?? (params.size ? 'library' : 'overview');
+    const page = requestedPage === 'activity' && !session.managementAvailable ? 'overview' : requestedPage;
+    if (page === 'activity' && !session.signedIn) { showLogin(); return; }
     nav.hidden = false;
     logout.hidden = !session.signedIn;
     manageLogin.hidden = session.signedIn || !session.managementAvailable;
@@ -509,7 +507,7 @@ logout.addEventListener('submit', async event => {
   event.preventDefault();
   try {
     await api('logout', { body: {} });
-    if (readWithoutLogin && new URLSearchParams(location.search).get('view') === 'activity') location.assign('/?view=overview');
+    if (new URLSearchParams(location.search).get('view') === 'activity') location.assign('/?view=overview');
     else await load();
   }
   catch (error) { errorMessage(error.message, true); }

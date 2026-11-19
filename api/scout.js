@@ -61,7 +61,6 @@ export default async function handler(req, res) {
   const secret = env.SCOUT_SESSION_SECRET;
   const managementAvailable = (password?.length ?? 0) >= 24 && (secret?.length ?? 0) >= 32;
   const signedIn = managementAvailable && session(req, secret);
-  const readWithoutLogin = env.VERCEL_ENV === 'preview';
   const action = url.searchParams.get('action');
   const isPost = req.method === 'POST';
   if (isPost && (req.headers.origin !== url.origin || !/^application\/json(?:;|$)/i.test(req.headers['content-type'] ?? ''))) {
@@ -71,8 +70,7 @@ export default async function handler(req, res) {
   const cookie = cookieName + '=';
   const attributes = '; Path=/; HttpOnly; SameSite=Lax' + (local ? '' : '; Secure');
   if (action === 'session' && req.method === 'GET') {
-    if (!managementAvailable && !readWithoutLogin) return json(res, 503, { error: '请配置 Scout 登录密钥' });
-    return json(res, 200, { signedIn, readWithoutLogin, managementAvailable });
+    return json(res, 200, { signedIn, managementAvailable });
   }
   let body;
   if (isPost) {
@@ -93,7 +91,7 @@ export default async function handler(req, res) {
   const reading = req.method === 'GET' && readActions.has(action);
   const managing = req.method === 'GET' && managementReads.has(action) || isPost && postActions.has(action);
   if (!reading && !managing) return json(res, 404, { error: '未找到请求' });
-  if (!signedIn && !(readWithoutLogin && reading)) return json(res, 401, { error: '请登录 Scout 管理入口' });
+  if (!signedIn && managing) return json(res, 401, { error: '请登录 Scout 管理入口' });
 
   try {
     const target = new URL('/' + action, env.SCOUT_WORKER_URL);

@@ -1,6 +1,6 @@
 # Scout · Communication Research Assistant
 
-Scout 是面向传播学硕士研究的私人文献库。Vercel 提供检索、证据详情、选题与简报页面。Cloudflare Worker 负责采集和任务执行，Scout 专用 D1 保存文献、证据、检索进度和简报。你可以从单篇文献详情导出 BibTeX／RIS，或选中单篇写入 Zotero 收藏夹。
+Scout 是面向传播学硕士研究的文献库。Vercel 提供检索、证据详情、选题与简报页面。Cloudflare Worker 负责采集和任务执行，Scout 专用 D1 保存文献、证据、检索进度和简报。你可以从单篇文献详情导出 BibTeX／RIS，或选中单篇写入 Zotero 收藏夹。
 
 ## 本地验证
 
@@ -79,7 +79,7 @@ npx wrangler secret put FEISHU_SIGNING_SECRET --env staging
 npm run feishu:test -- https://你的-preview.vercel.app
 ```
 
-成功时终端确认飞书已接收。打开群内的「Scout 飞书推送测试」卡片，点「查看完整简报」，登录 Scout 后应看到测试简报。测试入口只在 staging 开启，需要 Worker token。测试无需生成报告，也无需开启自动推送、Cron 或 AI。若返回发送结果无法确认，先检查群内消息再决定是否重试。 [飞书自定义机器人指南](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot)
+成功时终端确认飞书已接收。打开群内的「Scout 飞书推送测试」卡片，点「查看完整简报」后应看到测试简报。测试入口只在 staging 开启，需要 Worker token。测试无需生成报告，也无需开启自动推送、Cron 或 AI。若返回发送结果无法确认，先检查群内消息再决定是否重试。 [飞书自定义机器人指南](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot)
 
 ### 3. 建立生产 D1 与 Worker
 
@@ -121,16 +121,16 @@ npx wrangler secret put CROSSREF_MAILTO
 
 ### 4. 连接 Vercel Hobby
 
-在 Vercel 导入 GitHub 的 Scout 仓库，项目根目录保持仓库根，使用仓库中的 `vercel.json` 和 Node.js 24。以下四个变量放在 Vercel 服务端环境。Preview 环境指向测试 Worker，Production 环境指向生产 Worker。
+在 Vercel 导入 GitHub 的 Scout 仓库，项目根目录保持仓库根，使用仓库中的 `vercel.json` 和 Node.js 24。在 Vercel 服务端配置 Worker 地址与访问密钥，有管理需求时再配置管理口令和签名密钥。各环境可指向相应的 Worker。
 
 | Vercel 变量 | 值 |
 | --- | --- |
 | `SCOUT_WORKER_URL` | 对应 Worker 的 HTTPS 基础地址 |
 | `SCOUT_API_TOKEN` | 同环境的 Cloudflare Secret |
-| `SCOUT_PASSWORD` | 自行生成的至少 24 字符高熵访问口令 |
-| `SCOUT_SESSION_SECRET` | 自行生成的至少 32 字符随机签名密钥 |
+| `SCOUT_PASSWORD` | 可选，管理入口使用的至少 24 字符高熵访问口令 |
+| `SCOUT_SESSION_SECRET` | 可选，管理入口使用的至少 32 字符随机签名密钥 |
 
-登录、Cookie 和 Worker token 由服务端校验。Vercel Preview 在满足 Vercel 的访问保护后可直接查看研究总览、文献、简报和选题，并下载导出文件。任务管理、文献编辑、Zotero 写入和飞书核对通过「管理登录」进入。Production 的 Scout 登录策略独立于 Preview。
+打开 Scout 可直接查看研究总览、文献、简报和选题，并下载导出文件。仅提供 Worker 地址和访问密钥即可部署只读网页，Worker 密钥由 Vercel 服务端使用。配置管理口令和签名密钥后，可通过「管理登录」进入任务、文献编辑、Zotero 写入和飞书核对。
 
 ### 5. 试运行和启用
 

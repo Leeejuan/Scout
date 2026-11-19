@@ -248,7 +248,7 @@ test('scheduled report persists before Feishu and ambiguous outcomes never auto-
   assert.equal((await r.request('/report?period=2026-12-16').then(res => res.json())).delivery, 'sent');
 });
 
-test('Vercel shell requires private session and blocks cross-origin mutations', async t => {
+test('Vercel shell requires a management session and blocks cross-origin mutations', async t => {
   const set = { SCOUT_LOCAL_DEV: 'true', SCOUT_PASSWORD: 'synthetic-password-not-for-use', SCOUT_SESSION_SECRET: 'synthetic-session-secret-32-characters' };
   const previous = Object.fromEntries(Object.keys(set).map(key => [key, process.env[key]]));
   Object.assign(process.env, set);
@@ -263,7 +263,7 @@ test('Vercel shell requires private session and blocks cross-origin mutations', 
   await once(server, 'listening');
   const base = 'http://127.0.0.1:' + server.address().port;
   const send = (action, opts) => fetch(base + '/api/scout?action=' + action, opts);
-  assert.equal((await send('library')).status, 401);
+  assert.equal((await send('activity')).status, 401);
   const login = origin => send('login', { method: 'POST', headers: { origin, 'content-type': 'application/json' },
     body: JSON.stringify({ password: set.SCOUT_PASSWORD }) });
   assert.equal((await login('https://external.test')).status, 403);
@@ -274,7 +274,7 @@ test('Vercel shell requires private session and blocks cross-origin mutations', 
   assert.equal((await send('session', { headers: { cookie: cookie + 'x' } }).then(res => res.json())).signedIn, false);
 });
 
-test('Preview serves research data before login and keeps management actions authenticated', async t => {
+test('public research pages work without management credentials and management stays authenticated', async t => {
   const token = 'synthetic-readonly-test-worker-token';
   const requests = [];
   const worker = createServer((req, res) => {
@@ -305,7 +305,7 @@ test('Preview serves research data before login and keeps management actions aut
   const post = (body, cookie) => ({ method: 'POST', headers: { origin: base, 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
     body: JSON.stringify(body) });
   const session = await send('session').then(res => res.json());
-  assert.deepEqual(session, { signedIn: false, readWithoutLogin: true, managementAvailable: true });
+  assert.deepEqual(session, { signedIn: false, managementAvailable: true });
   assert.equal((await send('overview')).status, 200);
   assert.deepEqual(await send('paper&doi=' + encodeURIComponent(doi)).then(res => res.json()), { doi });
   assert.deepEqual(await send('report&period=feishu-test').then(res => res.json()), { demo: true });
@@ -318,7 +318,12 @@ test('Preview serves research data before login and keeps management actions aut
   assert.equal((await send('zotero', post({ doi }, cookie))).status, 200);
   assert.ok(requests.every(entry => entry.token === 'Bearer ' + token));
   process.env.VERCEL_ENV = 'production';
-  assert.equal((await send('overview')).status, 401);
+  delete process.env.SCOUT_PASSWORD;
+  delete process.env.SCOUT_SESSION_SECRET;
+  assert.deepEqual(await send('session').then(res => res.json()), { signedIn: false, managementAvailable: false });
+  assert.equal((await send('overview')).status, 200);
+  assert.equal((await send('activity', { headers: { cookie } })).status, 401);
+  assert.equal((await send('zotero', post({ doi }, cookie))).status, 401);
 });
 
 test('local text retains PDF locators and accepts only attributable manual evidence', async t => {
